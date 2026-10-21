@@ -4,17 +4,41 @@ import Foundation
 
 enum ResourceType: String, CaseIterable, Hashable, Codable {
     case image = "图片"
+    case color = "颜色"
     case xib = "XIB·SB"
     case code = "代码"
+    case data = "数据"
     case other = "其他"
 
     var symbolName: String {
         switch self {
         case .image: return "photo"
+        case .color: return "paintpalette"
         case .xib: return "doc.richtext"
         case .code: return "swift"
+        case .data: return "cylinder.split.1x2"
         case .other: return "doc"
         }
+    }
+}
+
+// MARK: - 大小格式化
+//
+// 全 App 统一按 1000 进制显示（与 Finder 一致），避免同一个文件在列表和汇总里出现两种数值。
+
+enum SizeFormat {
+    static func text(_ bytes: Int) -> String {
+        let value = max(0, bytes)
+        if value >= 1_000_000_000 {
+            return String(format: "%.2f GB", Double(value) / 1_000_000_000)
+        }
+        if value >= 1_000_000 {
+            return String(format: "%.1f MB", Double(value) / 1_000_000)
+        }
+        if value >= 1_000 {
+            return String(format: "%.0f KB", Double(value) / 1_000)
+        }
+        return "\(value) B"
     }
 }
 
@@ -34,6 +58,8 @@ struct ResourceItem: Identifiable, Hashable, Codable {
     let unreferenced: Bool
     /// 低置信度：命中模糊信号（仅出现在注释、名称片段、未找到名称引用等），需人工确认
     let needsReview: Bool
+    /// 文件在工程导航器里，但没有加入任何 target 构建阶段
+    let notInTarget: Bool
     /// 判定说明，用于 tooltip 与预览页
     let note: String?
     /// 需要整体处理的目录（如 Assets.xcassets 里的 .imageset）；单文件资源为 nil
@@ -48,6 +74,7 @@ struct ResourceItem: Identifiable, Hashable, Codable {
         type: ResourceType,
         unreferenced: Bool,
         needsReview: Bool = false,
+        notInTarget: Bool = false,
         note: String? = nil,
         directoryPath: String? = nil
     ) {
@@ -59,19 +86,23 @@ struct ResourceItem: Identifiable, Hashable, Codable {
         self.type = type
         self.unreferenced = unreferenced
         self.needsReview = needsReview
+        self.notInTarget = notInTarget
         self.note = note
         self.directoryPath = directoryPath
     }
 
-    var sizeText: String {
-        if sizeBytes >= 1_000_000 {
-            return String(format: "%.1f MB", Double(sizeBytes) / 1_000_000)
-        }
-        return "\(max(1, Int((Double(sizeBytes) / 1024).rounded()))) KB"
-    }
+    var sizeText: String { SizeFormat.text(sizeBytes) }
 
     /// 高置信度冗余（未引用且无需人工确认）
-    var isConfirmedUnused: Bool { unreferenced && !needsReview }
+    var isConfirmedUnused: Bool { unreferenced && !needsReview && !notInTarget }
+
+    /// 导出报告与列表筛选用的状态文案
+    var statusText: String {
+        if notInTarget { return "未加入 target" }
+        if needsReview { return "待确认" }
+        if unreferenced { return "高置信度未引用" }
+        return "已引用"
+    }
 }
 
 // MARK: - 忽略规则

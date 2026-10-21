@@ -43,6 +43,12 @@ extension ScanEngine {
             if Self.shouldSkip(directoryNamed: name)
                 || rules.isIgnored(relativePath: relativePath, isDirectory: true) {
                 enumerator.skipDescendants()
+                continue
+            }
+            // Assets.xcassets 及其条目目录由扫描阶段整体聚合，内部文件不计入进度分母
+            let ext = url.pathExtension.lowercased()
+            if ext == "xcassets" || Self.assetDirectoryExtensions.contains(ext) {
+                enumerator.skipDescendants()
             }
         }
         return result

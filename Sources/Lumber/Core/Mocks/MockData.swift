@@ -4,7 +4,6 @@ import Foundation
 
 enum MockData {
     static var projectName: String { "DemoApp.xcodeproj" }
-    static var projectPath: String { "~/Develop/DemoApp" }
 
     static var scanSteps: [String] {
         [
@@ -39,7 +38,19 @@ enum MockData {
             ResourceItem(
                 id: UUID(), name: "old_launch.pdf",
                 relativePath: "Assets.xcassets/old_launch.dataset/old_launch.pdf",
-                absolutePath: "", sizeBytes: 188_416, type: .image, unreferenced: true
+                absolutePath: "", sizeBytes: 188_416, type: .data, unreferenced: true
+            ),
+            ResourceItem(
+                id: UUID(), name: "brand_legacy_color",
+                relativePath: "Assets.xcassets/brand_legacy_color.colorset",
+                absolutePath: "", sizeBytes: 1_280, type: .color, unreferenced: true
+            ),
+            ResourceItem(
+                id: UUID(), name: "OrphanPanel.swift",
+                relativePath: "Views/Legacy/OrphanPanel.swift",
+                absolutePath: "", sizeBytes: 7_680, type: .code, unreferenced: true,
+                needsReview: true, notInTarget: true,
+                note: "在工程导航器中，但没有加入任何 target 的编译阶段"
             ),
             ResourceItem(
                 id: UUID(), name: "avatar_placeholder.webp",

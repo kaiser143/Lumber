@@ -24,17 +24,42 @@ extension AppModel {
         openProject(at: url)
     }
 
-    /// 校验并进入扫描；--mock 调试模式下走演示流程
+    /// 校验并进入扫描；--mock 调试模式下走演示流程。
+    /// 目录 / workspace 里有多个工程时先让用户选择，不静默取第一个。
     func openProject(at url: URL) {
         do {
-            let xcodeprojURL = try ProjectResolver.resolve(url)
-            if isMockMode {
-                startMockScan(projectName: xcodeprojURL.lastPathComponent)
-            } else {
-                startScan(xcodeprojURL: xcodeprojURL)
+            let candidates = try ProjectResolver.resolveCandidates(url)
+            if candidates.count > 1 {
+                pendingProjects = candidates
+                showingProjectChoice = true
+                return
             }
+            guard let xcodeprojURL = candidates.first else {
+                throw ProjectDropError.emptyDirectory(url.lastPathComponent)
+            }
+            startProject(at: xcodeprojURL)
         } catch {
             presentDropError(error.localizedDescription)
+        }
+    }
+
+    /// 多工程选择面板
+    func choosePendingProject(_ url: URL) {
+        pendingProjects = []
+        showingProjectChoice = false
+        startProject(at: url)
+    }
+
+    func cancelProjectChoice() {
+        pendingProjects = []
+        showingProjectChoice = false
+    }
+
+    private func startProject(at xcodeprojURL: URL) {
+        if isMockMode {
+            startMockScan(projectName: xcodeprojURL.lastPathComponent)
+        } else {
+            startScan(xcodeprojURL: xcodeprojURL)
         }
     }
 
@@ -43,7 +68,6 @@ extension AppModel {
         scanTask?.cancel()
         resetScanState()
         project = nil
-        inventory = []
         projectName = xcodeprojURL.lastPathComponent
         phase = .scanning
         progress = ScanProgress(fraction: 0.01, phaseText: "解析工程", currentPath: "读取 project.pbxproj…")
@@ -89,9 +113,9 @@ extension AppModel {
                 if Task.isCancelled { return }
 
                 let listed = outcome.listedItems
-                self.inventory = outcome.items
                 self.items = listed
                 self.selectedIDs = listed.first.map { [$0.id] } ?? []
+                self.activeSelectionID = listed.first?.id
                 self.phase = .results
                 self.showToast(Self.summaryText(for: outcome))
             } catch {
@@ -113,6 +137,10 @@ extension AppModel {
         let confirmed = outcome.confirmedCount
         let uncertain = outcome.uncertainCount
         let seconds = String(format: "%.1fs", outcome.seconds)
+        let notInTarget = outcome.notInTargetCount
+        if notInTarget > 0 {
+            return "扫描完成（\(seconds)）：\(confirmed) 项未引用，\(uncertain) 项待确认（含 \(notInTarget) 项未加入 target）"
+        }
         return "扫描完成（\(seconds)）：\(confirmed) 项未引用，\(uncertain) 项待确认"
     }
 

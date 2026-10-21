@@ -6,14 +6,14 @@ import Foundation
 
 struct ScanCandidate: Sendable {
     enum Kind: Sendable {
-        /// 代码文件：只看是否被 pbxproj 引用
+        /// 代码文件：看是否参与编译，以及类型名是否被其他文件使用
         case code
-        /// strings 等随包资源：pbxproj 引用或名称出现即算使用
+        /// strings 等随包资源：pbxproj 构建引用或名称出现即算使用
         case bundled
         /// xib / storyboard：名称需出现在代码、其他界面文件或 Info.plist 配置里
         case interface
-        /// Assets.xcassets 中的 imageset：整目录聚合成一条，按 imageset 名匹配
-        case imageSet
+        /// Assets.xcassets 中的 imageset / colorset / dataset：整目录聚合成一条，按资源名匹配
+        case asset
         /// 散落在 bundle 里的图片文件
         case looseImage
     }
@@ -38,6 +38,8 @@ enum ReferenceVerdict: Sendable {
     case uncertain(String)
     /// 高置信度冗余
     case unused(String)
+    /// 文件在工程导航器里，但没有加入任何 target 构建阶段
+    case notInTarget(String)
 }
 
 // MARK: - 引用判定
@@ -58,8 +60,8 @@ struct ReferenceJudge {
             return judgeBundled(candidate)
         case .interface:
             return judgeInterface(candidate)
-        case .imageSet:
-            return judgeImageSet(candidate)
+        case .asset:
+            return judgeAsset(candidate)
         case .looseImage:
             return judgeLooseImage(candidate)
         }
@@ -67,16 +69,20 @@ struct ReferenceJudge {
 
     // MARK: - 各类型
 
-    /// 代码文件：先看是否登记在工程编译清单里，再看文件里声明的类型有没有被别的文件用到
+    /// 代码文件：先看是否加入 target 编译阶段，再看文件里声明的类型有没有被别的文件用到
     ///
     /// 代码文件不按「有没有实例化」判定：基类、协议、只做类型标注的模型都不会被 new，
     /// 但只要它们的名字出现在另一个源文件里（继承、遵循、属性/参数类型），就是有效引用。
     private func judgeCode(_ candidate: ScanCandidate) -> ReferenceVerdict {
-        if project.isReferenced(candidate.absolutePath) {
-            return .referenced("已纳入工程编译")
+        let path = candidate.absolutePath
+        if project.isBuilt(path) {
+            return .referenced("已加入 target 编译阶段")
         }
         if index.isUsedInOtherDocuments(anyOf: candidate.keys) {
             return .referenced("文件里声明的类型被其他源文件使用（基类 / 协议 / 类型引用）")
+        }
+        if project.isReferenced(path) {
+            return .notInTarget("在工程导航器中，但没有加入任何 target 的编译阶段")
         }
         if index.isMentionedInOtherDocuments(anyOf: candidate.keys) {
             return .uncertain("既不在工程编译清单中，类型名也只出现在其他文件的注释里")
@@ -85,14 +91,18 @@ struct ReferenceJudge {
     }
 
     private func judgeBundled(_ candidate: ScanCandidate) -> ReferenceVerdict {
-        if project.isReferenced(candidate.absolutePath) {
-            return .referenced("已加入 target 资源")
+        let path = candidate.absolutePath
+        if project.isBuilt(path) {
+            return .referenced("已加入 target 资源阶段")
         }
         if index.containsStrict(anyOf: candidate.keys) {
             return .referenced("代码中引用了该名称")
         }
         if index.containsLoose(anyOf: candidate.keys) {
             return .uncertain("名称只出现在注释或说明文字中")
+        }
+        if project.isReferenced(path) {
+            return .notInTarget("在工程导航器中，但没有加入 Copy Bundle Resources")
         }
         return .unused("既不在工程引用表，也未在工程文本中出现")
     }
@@ -108,15 +118,23 @@ struct ReferenceJudge {
         if index.containsLoose(anyOf: candidate.keys) {
             return .uncertain("名称只出现在注释或说明文字中")
         }
-        if project.isReferenced(candidate.absolutePath) {
+        if project.isBuilt(candidate.absolutePath) {
             return .uncertain("已加入 target 资源，但工程文本中没有出现名称，可能通过运行时拼接加载")
+        }
+        if project.isReferenced(candidate.absolutePath) {
+            return .notInTarget("在工程导航器中，但没有加入任何 target 的资源阶段")
         }
         return .unused("未在工程引用表中，工程文本里也没有出现该名称")
     }
 
-    private func judgeImageSet(_ candidate: ScanCandidate) -> ReferenceVerdict {
+    /// imageset / colorset / dataset：按资源名匹配；
+    /// 同时检查「工程里有、但没有加入 Copy Bundle Resources」——这类资源不会进包，通常就是漏配。
+    private func judgeAsset(_ candidate: ScanCandidate) -> ReferenceVerdict {
         if project.referencedResourceNames.contains(candidate.name) {
             return .referenced("构建设置中配置")
+        }
+        if project.isReferenced(candidate.absolutePath), !project.isBuilt(candidate.absolutePath) {
+            return .notInTarget("所在资源目录在工程中，但没有加入 Copy Bundle Resources")
         }
         if index.containsStrict(anyOf: candidate.keys) {
             return .referenced("代码或界面文件中出现该名称")
@@ -130,12 +148,17 @@ struct ReferenceJudge {
         if candidate.name.contains(" ") {
             return .uncertain("名称包含空格，引用时可能被拆分或去掉空格")
         }
-        return .unused("工程文本中没有出现该 imageset 名称")
+        return .unused("工程文本中没有出现该\(candidate.type.rawValue)资源名")
     }
 
     private func judgeLooseImage(_ candidate: ScanCandidate) -> ReferenceVerdict {
         if index.containsStrict(anyOf: candidate.keys) {
             return .referenced("代码或界面文件中出现该文件名")
+        }
+        // 蓝色文件夹（folder reference）与 Xcode 16 同步文件夹里的文件常被运行时按路径读取，
+        // 不能因为工程文本里没出现文件名就判为高置信度未引用。
+        if project.isReferenced(candidate.absolutePath) {
+            return .uncertain("位于整目录引用的文件夹中，可能通过文件路径在运行时加载")
         }
         if index.containsLoose(anyOf: candidate.keys) {
             return .uncertain("文件名只出现在注释或说明文字中")

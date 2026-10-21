@@ -9,11 +9,24 @@ enum ScanPhase {
     case results
 }
 
-/// 边栏可达页面：扫描流程、忽略规则、设置
+/// 边栏可达页面：扫描流程、忽略规则、设置、关于
 enum AppPage: Hashable {
     case scan
     case rules
     case settings
+    case about
+}
+
+// MARK: - 结果排序
+
+enum SortOption: String, CaseIterable, Identifiable, Hashable {
+    case standard = "默认"
+    case name = "名称"
+    case size = "大小"
+    case type = "类型"
+    case path = "路径"
+
+    var id: String { rawValue }
 }
 
 // MARK: - 扫描进度

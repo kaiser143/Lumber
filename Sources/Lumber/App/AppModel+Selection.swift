@@ -8,19 +8,68 @@ import Foundation
 extension AppModel {
     func select(_ item: ResourceItem) {
         selectedIDs = [item.id]
+        activeSelectionID = item.id
+    }
+
+    /// 打开（或切换）单例预览窗口的内容
+    func openPreview(_ item: ResourceItem) {
+        select(item)
+        previewItemID = item.id
+    }
+
+    /// Command 点击：加入 / 移出多选
+    func toggleSelection(_ item: ResourceItem) {
+        if selectedIDs.contains(item.id) {
+            selectedIDs.remove(item.id)
+            if activeSelectionID == item.id {
+                activeSelectionID = filteredItems.first { selectedIDs.contains($0.id) }?.id
+            }
+        } else {
+            selectedIDs.insert(item.id)
+            activeSelectionID = item.id
+        }
+    }
+
+    /// Shift 点击：从锚点扩展到目标项
+    func extendSelection(to item: ResourceItem) {
+        let list = filteredItems
+        guard let target = list.firstIndex(where: { $0.id == item.id }) else { return }
+        let anchorID = activeSelectionID ?? selectedIDs.first
+        let anchor = anchorID.flatMap { id in list.firstIndex(where: { $0.id == id }) } ?? target
+        let range = anchor <= target ? anchor...target : target...anchor
+        selectedIDs = Set(list[range].map(\.id))
+        activeSelectionID = item.id
+    }
+
+    func selectAllFiltered() {
+        selectedIDs = Set(filteredItems.map(\.id))
+        activeSelectionID = filteredItems.first?.id
+    }
+
+    func clearSelection() {
+        selectedIDs = []
+        activeSelectionID = nil
     }
 
     func stepSelection(_ delta: Int) {
         let list = filteredItems
         guard !list.isEmpty else { return }
-        let current = list.firstIndex(where: { selectedIDs.contains($0.id) }) ?? (delta > 0 ? -1 : 0)
+        let anchorID = activeSelectionID ?? selectedIDs.first
+        let current = anchorID.flatMap { id in list.firstIndex(where: { $0.id == id }) }
+            ?? (delta > 0 ? -1 : 0)
         let next = min(max(current + delta, 0), list.count - 1)
-        selectedIDs = [list[next].id]
+        let target = list[next]
+        selectedIDs = [target.id]
+        activeSelectionID = target.id
     }
 
     /// 供主窗口回车/空格打开预览窗口时取「要预览的条目」
     var selectionForPreview: ResourceItem? {
-        filteredItems.first { selectedIDs.contains($0.id) } ?? filteredItems.first
+        if let id = activeSelectionID,
+           let item = filteredItems.first(where: { $0.id == id }) {
+            return item
+        }
+        return filteredItems.first { selectedIDs.contains($0.id) } ?? filteredItems.first
     }
 
     /// 预览窗口内左右方向键切换：只在预览窗口自己的上下文中移动

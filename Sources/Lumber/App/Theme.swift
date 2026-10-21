@@ -20,8 +20,10 @@ extension ResourceType {
     var tint: Color {
         switch self {
         case .image: return .blue
+        case .color: return .pink
         case .xib: return .purple
         case .code: return .orange
+        case .data: return .teal
         case .other: return .gray
         }
     }
@@ -93,23 +95,6 @@ struct GlassDivider: View {
     }
 }
 
-// MARK: - 顶部三段式小标题（对标「默认 → Q3 · 均衡」）
-
-struct TopHint: View {
-    var text: String
-    var body: some View {
-        Text(text)
-            .font(.system(size: 11))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 4)
-            .glassPanel(in: Capsule())
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.top, 8)
-            .padding(.bottom, 6)
-    }
-}
-
 // MARK: - Toast
 
 struct ToastView: View {
@@ -132,6 +117,16 @@ struct ResourceThumbnail: View {
 
     @State private var loadedImage: NSImage?
 
+    init(item: ResourceItem, size: CGFloat = 46) {
+        self.item = item
+        self.size = size
+        // 首次出现时同步命中内存缓存：滚动复用 / 来回滚动不会出现「先空后图」的闪跳
+        let cached = item.type == .image && !item.absolutePath.isEmpty
+            ? ImageStore.shared.cachedThumbnail(for: item)
+            : nil
+        _loadedImage = State(initialValue: cached)
+    }
+
     /// 真实图片异步加载；mock 条目（无绝对路径）继续用程序生成的渐变图
     private var displayImage: NSImage? {
         loadedImage ?? (item.absolutePath.isEmpty ? MockImages.shared.thumbnail(for: item) : nil)
@@ -153,46 +148,22 @@ struct ResourceThumbnail: View {
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .glassPanel(
-            cornerRadius: 9,
-            tint: item.type.tint.opacity(0.12)
+        // 缩略图底板用纯色 tint：小面积上玻璃几乎看不出差别，却会在滚动时不断重采样
+        .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(item.type.tint.opacity(0.12))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.5)
         )
         .task(id: item.id) {
-            guard item.type == .image, !item.absolutePath.isEmpty else { return }
-            loadedImage = await ImageStore.shared.thumbnail(for: item)
+            guard item.type == .image, !item.absolutePath.isEmpty, loadedImage == nil else { return }
+            let image = await ImageStore.shared.thumbnail(for: item)
+            // 图片就位时不要带隐式动画，否则会在滚动中闪一下淡入
+            var transaction = Transaction()
+            transaction.animation = nil
+            withTransaction(transaction) { loadedImage = image }
         }
-    }
-}
-
-// MARK: - 系统色系渐变胶囊（对标图1的压缩率标签）
-
-struct GradientBadge: View {
-    let text: String
-    var body: some View {
-        Text(text)
-            .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(
-                Capsule().fill(
-                    LinearGradient(
-                        colors: [Color.accentColor, Color.purple],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-            )
-            .overlay(
-                Capsule().strokeBorder(
-                    LinearGradient(
-                        colors: [.white.opacity(0.55), .white.opacity(0.05)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    ),
-                    lineWidth: 0.5
-                )
-            )
-            .shadow(color: Color.accentColor.opacity(0.28), radius: 4, y: 1)
     }
 }

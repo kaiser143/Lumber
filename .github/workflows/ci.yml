@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    # Liquid Glass（glassEffect）要求 macOS 26 SDK；macos-latest 会跟随 GitHub 的最新镜像。
+    # 如果镜像尚未升级，请改成显式可用的版本（例如 macos-26）。
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Build
+        run: swift build -v
+
+      - name: Test
+        run: swift test

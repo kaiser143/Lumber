@@ -1,5 +1,38 @@
 import SwiftUI
 
+// MARK: - 单例预览窗口
+//
+// `Window`（而不是按 value 创建的 WindowGroup）保证同一时间只有一个预览窗口。
+// 切换资源时只更新 AppModel.previewItemID，窗口内容随之替换。
+
+struct PreviewWindow: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Group {
+            if let item = currentItem {
+                PreviewView(item: item)
+            } else {
+                VStack(spacing: 10) {
+                    Image(systemName: "photo")
+                        .font(.system(size: 30))
+                        .foregroundStyle(.tertiary)
+                    Text("没有可预览的资源")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.lumberCanvas)
+            }
+        }
+    }
+
+    private var currentItem: ResourceItem? {
+        guard let id = model.previewItemID else { return nil }
+        return model.items.first { $0.id == id }
+    }
+}
+
 // MARK: - 预览窗口内容（对齐参考图1：无标题栏、图片尽量铺满、四边等距、圆角）
 
 struct PreviewView: View {
@@ -28,12 +61,17 @@ struct PreviewView: View {
     @State private var baseZoom: CGFloat = 1
     @State private var rotation: Double = 0
     @State private var hostWindow: NSWindow?
+    /// 预览窗口的本地键盘事件监视器（空格 / Esc / 左右方向键）
+    @State private var keyMonitor: Any?
     /// 真实图片（预览大图），mock 条目为 nil
     @State private var loadedImage: NSImage?
     /// 真实文本内容（代码 / XIB / Storyboard），mock 条目为 nil
     @State private var loadedText: String?
+    /// 窗口当前请求展示的条目（由 PreviewWindow 传入；切换资源时更新，但不重建整个视图）
+    private let incomingItem: ResourceItem
 
     init(item: ResourceItem) {
+        incomingItem = item
         _currentItem = State(initialValue: item)
     }
 
@@ -51,18 +89,34 @@ struct PreviewView: View {
             hostWindow = window
             applyWindowLimits(window)
             fitWindowToImage(window)
+            installKeyMonitor(for: window)
         })
+        .onDisappear { removeKeyMonitor() }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeScreenNotification)) { note in
             // 换到更小的屏幕时，上限和当前尺寸都要重新收一遍
             guard let window = note.object as? NSWindow, window === hostWindow else { return }
             applyWindowLimits(window)
             fitWindowToImage(window)
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
+            // 关闭后重新打开同一个 Window 场景时，确保键盘监视器仍然在位
+            guard let window = note.object as? NSWindow else { return }
+            if hostWindow == nil { hostWindow = window }
+            guard window === hostWindow else { return }
+            installKeyMonitor(for: window)
+        }
         .navigationTitle(currentItem.name)
         .task(id: currentItem.id) { await loadFileContent() }
+        .onChange(of: incomingItem.id) { _, _ in
+            guard currentItem.id != incomingItem.id else { return }
+            currentItem = incomingItem
+            resetTransform()
+        }
         .onKeyPress(.leftArrow) { step(-1); return .handled }
         .onKeyPress(.rightArrow) { step(1); return .handled }
+        .onKeyPress(.space) { dismiss(); return .handled }
         .onKeyPress(.escape) { dismiss(); return .handled }
+        .onExitCommand { dismiss() }
     }
 
     /// 从磁盘读取当前条目的真实内容（图片解码 / 文本读取），读完再按图片比例校正窗口尺寸
@@ -79,7 +133,7 @@ struct PreviewView: View {
             loadedText = await Task.detached(priority: .userInitiated) {
                 TextFileLoader.read(at: path)
             }.value
-        case .other:
+        case .color, .data, .other:
             break
         }
         if let hostWindow { fitWindowToImage(hostWindow) }
@@ -95,6 +149,42 @@ struct PreviewView: View {
         currentItem = model.stepPreview(from: currentItem, by: delta)
         resetTransform()
         if let hostWindow { fitWindowToImage(hostWindow) }
+    }
+
+    // MARK: - 键盘事件
+    //
+    // 预览窗口里图片不可聚焦、代码预览是可选中的 ScrollView，
+    // SwiftUI 的 onKeyPress 依赖焦点，实际经常收不到空格 / Esc。
+    // 这里在窗口级别装本地监视器：只拦截本窗口、无 Command 修饰的按键。
+
+    private func installKeyMonitor(for window: NSWindow) {
+        removeKeyMonitor()
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.window === window,
+                  !event.modifierFlags.contains(.command) else { return event }
+            switch event.keyCode {
+            case 49: // 空格
+                dismiss()
+                return nil
+            case 53: // Esc
+                dismiss()
+                return nil
+            case 123: // ←
+                step(-1)
+                return nil
+            case 124: // →
+                step(1)
+                return nil
+            default:
+                return event
+            }
+        }
+    }
+
+    private func removeKeyMonitor() {
+        guard let keyMonitor else { return }
+        NSEvent.removeMonitor(keyMonitor)
+        self.keyMonitor = nil
     }
 
     /// 预览窗口的最大尺寸：不超过屏幕可视区的 90%，同时兜住拖拽放大与跨屏切换
@@ -186,7 +276,7 @@ struct PreviewView: View {
             switch currentItem.type {
             case .image: imageArea
             case .code, .xib: codeArea
-            case .other: infoArea
+            case .color, .data, .other: infoArea
             }
         }
     }

@@ -31,6 +31,19 @@ extension ScanEngine {
                 note: reason,
                 directoryPath: candidate.directoryPath
             )
+        case .notInTarget(let reason):
+            return ResourceItem(
+                name: candidate.name,
+                relativePath: candidate.relativePath,
+                absolutePath: candidate.absolutePath,
+                sizeBytes: candidate.sizeBytes,
+                type: candidate.type,
+                unreferenced: true,
+                needsReview: true,
+                notInTarget: true,
+                note: reason,
+                directoryPath: candidate.directoryPath
+            )
         case .unused(let reason):
             return ResourceItem(
                 name: candidate.name,
@@ -71,10 +84,10 @@ extension ScanEngine {
                 name: common.0, relativePath: common.1, absolutePath: common.2, sizeBytes: common.3,
                 type: .image, directoryPath: nil, keys: imageKeys(for: url), kind: .looseImage
             )
-        case .other:
+        case .color, .data, .other:
             return ScanCandidate(
                 name: common.0, relativePath: common.1, absolutePath: common.2, sizeBytes: common.3,
-                type: .other, directoryPath: nil, keys: nameKeys(baseName), kind: .bundled
+                type: type, directoryPath: nil, keys: nameKeys(baseName), kind: .bundled
             )
         }
     }
@@ -110,38 +123,21 @@ extension ScanEngine {
         return result == name ? nil : result
     }
 
-    /// imageset 聚合成一条：大小取目录内文件总和，预览用其中最大的图片
-    static func makeImageSetCandidate(at url: URL, root: URL) -> ScanCandidate? {
-        let contents = (try? FileManager.default.contentsOfDirectory(
-            at: url,
-            includingPropertiesForKeys: [.fileSizeKey],
-            options: [.skipsHiddenFiles]
-        )) ?? []
-
-        var totalSize = 0
-        var representative: URL?
-        var bestSize = -1
-        for file in contents where file.lastPathComponent != "Contents.json" {
-            let size = (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-            totalSize += size
-            if ResourceClassifier.type(for: file) == .image, size > bestSize {
-                bestSize = size
-                representative = file
-            }
-        }
-
-        let name = url.deletingPathExtension().lastPathComponent
-        var keys = [name]
-        if let camel = camelKey(name) { keys.append(camel) }
+    /// imageset / colorset / dataset 聚合成一条：大小取目录内文件总和，预览用其中最大的图片
+    static func makeAssetCandidate(from entry: AssetEntry, relativePath: String) -> ScanCandidate? {
+        guard let type = entry.kind.resourceType else { return nil }
+        var keys = [entry.name]
+        if let camel = camelKey(entry.name) { keys.append(camel) }
+        let representative = entry.representativeURL ?? entry.url
         return ScanCandidate(
-            name: name,
-            relativePath: relativePath(of: url, in: root),
-            absolutePath: (representative ?? url).standardizedFileURL.path,
-            sizeBytes: totalSize,
-            type: .image,
-            directoryPath: url.standardizedFileURL.path,
+            name: entry.name,
+            relativePath: relativePath,
+            absolutePath: representative.standardizedFileURL.path,
+            sizeBytes: entry.totalSizeBytes,
+            type: type,
+            directoryPath: entry.url.standardizedFileURL.path,
             keys: keys,
-            kind: .imageSet
+            kind: .asset
         )
     }
 

@@ -39,6 +39,7 @@ struct ScanOutcome: Sendable {
 
     var listedItems: [ResourceItem] { items.filter(\.unreferenced) }
     var confirmedCount: Int { items.filter(\.isConfirmedUnused).count }
+    var notInTargetCount: Int { items.filter(\.notInTarget).count }
 }
 
 // MARK: - 扫描引擎
@@ -56,11 +57,9 @@ actor ScanEngine {
         "json", "js", "ts", "tsx", "jsx", "html", "htm", "css", "md",
     ]
 
-    /// 这些资源集合不参与清理（AppIcon / 颜色 / 符号等由构建设置引用）
-    fileprivate static let ignoredAssetKinds: Set<String> = [
-        "colorset", "dataset", "appiconset", "symbolset", "launchimage",
-        "imagestack", "spriteatlas", "brandassets", "solidimagestack",
-    ]
+    /// 所有 Assets.xcassets 条目目录后缀；遇到时整目录跳过，由 .xcassets 分支统一解析
+    static let assetDirectoryExtensions: Set<String> =
+        Set(AssetEntry.Kind.allCases.map(\.rawValue)).union(["solidimagestack"])
 
     static let maxIndexedBytes = 1_500_000
     fileprivate static let progressInterval: TimeInterval = 0.08
@@ -128,13 +127,25 @@ actor ScanEngine {
                     } else if rules.isIgnored(relativePath: relativePath, isDirectory: true) {
                         enumerator.skipDescendants()
                         ignoredCount += 1
-                    } else if ext == "imageset" {
+                    } else if ext == "xcassets" {
+                        // 资源目录统一走 AssetCatalogParser：imageset / colorset / dataset
+                        // 都聚合成单条候选，目录内部的图片不再按散落文件重复扫描。
                         enumerator.skipDescendants()
-                        if let candidate = Self.makeImageSetCandidate(at: url, root: root) {
-                            candidates.append(candidate)
-                            typeCounts[.image, default: 0] += 1
+                        let catalog = project.assetCatalogs.first {
+                            $0.url.standardizedFileURL.path == url.standardizedFileURL.path
+                        } ?? AssetCatalogParser.parse(catalogURL: url, relativePath: relativePath)
+                        for entry in catalog.entries where entry.kind.isScannable {
+                            let entryRelative = Self.relativePath(of: entry.url, in: root)
+                            if rules.isIgnored(relativePath: entryRelative, isDirectory: true) {
+                                ignoredCount += 1
+                                continue
+                            }
+                            if let candidate = Self.makeAssetCandidate(from: entry, relativePath: entryRelative) {
+                                candidates.append(candidate)
+                                typeCounts[candidate.type, default: 0] += 1
+                            }
                         }
-                    } else if Self.ignoredAssetKinds.contains(ext) {
+                    } else if Self.assetDirectoryExtensions.contains(ext) {
                         enumerator.skipDescendants()
                     }
                     continue
@@ -151,8 +162,10 @@ actor ScanEngine {
                 let isInAssetCatalog = absolutePath.contains(".xcassets/")
                 let ext = url.pathExtension.lowercased()
 
-                if !isInAssetCatalog, Self.textExtensions.contains(ext) {
-                    let text = Self.readText(at: url)
+                if !isInAssetCatalog {
+                    // 文本文件既生成候选，也喂进引用索引；图片等二进制资源只生成候选。
+                    let isText = Self.textExtensions.contains(ext)
+                    let text = isText ? Self.readText(at: url) : nil
                     if let candidate = Self.textCandidate(
                         for: url, root: root, size: values?.fileSize ?? 0, text: text
                     ), options.includeCodeFiles || candidate.type != .code {

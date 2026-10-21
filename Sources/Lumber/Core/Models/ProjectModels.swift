@@ -16,8 +16,12 @@ struct ProjectInfo: Hashable {
     let targets: [String]
     /// pbxproj 中登记的文件绝对路径（已标准化，用于 O(1) 引用判定）
     let referencedPaths: Set<String>
+    /// 真正加入了 target 构建阶段（Sources / Resources / Frameworks）的路径
+    let builtPaths: Set<String>
     /// 整目录引用的路径（folder reference / Xcode 16 同步文件夹），其下所有文件视为被引用
     let folderReferencePaths: [String]
+    /// Xcode 16 同步根组：其中的文件由 Xcode 自动加入 target
+    let synchronizedRootPaths: [String]
     /// 工程内的 Assets.xcassets 资源目录
     let assetCatalogs: [AssetCatalogInfo]
     /// Info.plist 中配置的 Main storyboard 名称（不含扩展名）
@@ -37,6 +41,21 @@ struct ProjectInfo: Hashable {
     func isReferenced(_ absolutePath: String) -> Bool {
         if referencedPaths.contains(absolutePath) { return true }
         for folder in folderReferencePaths where absolutePath.hasPrefix(folder + "/") {
+            return true
+        }
+        return false
+    }
+
+    /// 该绝对路径是否真正参与构建。
+    /// 同步根组由 Xcode 自动纳入 target；普通 folder reference 只有作为 PBXBuildFile 出现时才算构建资源。
+    func isBuilt(_ absolutePath: String) -> Bool {
+        if builtPaths.contains(absolutePath) { return true }
+        // 只检查目录型引用，避免对每个候选遍历全部 PBXBuildFile 文件路径
+        for folder in folderReferencePaths
+        where builtPaths.contains(folder) && absolutePath.hasPrefix(folder + "/") {
+            return true
+        }
+        for root in synchronizedRootPaths where absolutePath.hasPrefix(root + "/") {
             return true
         }
         return false
@@ -71,6 +90,18 @@ struct AssetEntry: Hashable {
 
         /// 目录后缀，例如 .imageset
         var folderExtension: String { "." + rawValue }
+
+        /// 对应到结果列表里的资源类型；nil 表示不参与冗余扫描
+        var resourceType: ResourceType? {
+            switch self {
+            case .imageSet, .imageStack, .spriteAtlas: return .image
+            case .colorSet: return .color
+            case .dataSet: return .data
+            case .appIconSet, .symbolSet, .launchImage, .brandAssets, .other: return nil
+            }
+        }
+
+        var isScannable: Bool { resourceType != nil }
     }
 
     /// 资源名（目录名去掉 .imageset 等后缀），代码里 imageNamed("name") 用的就是它
@@ -80,6 +111,10 @@ struct AssetEntry: Hashable {
     let url: URL
     /// 目录内实际包含的图片/数据文件名（来自 Contents.json 与实际文件）
     let fileNames: [String]
+    /// 目录内所有文件的总大小（含 Contents.json）
+    let totalSizeBytes: Int
+    /// 预览用代表文件（优先最大的图片）；colorset 没有图片时为 nil
+    let representativeURL: URL?
 }
 
 // MARK: - 解析错误

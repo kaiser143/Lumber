@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - 结果列表页入口
 
@@ -14,9 +15,20 @@ struct ResultsScreen: View {
 struct ResultsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openWindow) private var openWindow
+    /// 键盘快捷键需要列表先拿到焦点；搜索框提交后会把焦点还给列表
+    @FocusState private var listFocused: Bool
 
     var body: some View {
         cardList
+            .focusable()
+            .focused($listFocused)
+            .focusEffectDisabled()
+            .onAppear { listFocused = true }
+            .onChange(of: model.listFocusRequest) { _, _ in listFocused = true }
+            .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                Task { await model.acceptDrop(providers: providers) }
+                return true
+            }
             .onKeyPress(.space) { openSelectedPreview(); return .handled }
             .onKeyPress(.return) { openSelectedPreview(); return .handled }
             .onKeyPress(.delete) { model.requestDeleteSelected(); return .handled }
@@ -24,6 +36,21 @@ struct ResultsView: View {
             .onKeyPress(.downArrow) { model.stepSelection(1); return .handled }
             .onKeyPress(.leftArrow) { model.stepSelection(-1); return .handled }
             .onKeyPress(.rightArrow) { model.stepSelection(1); return .handled }
+            .onKeyPress(.escape) {
+                guard !model.searchText.isEmpty else { return .ignored }
+                model.searchText = ""
+                return .handled
+            }
+            .onKeyPress(phases: .down) { press in
+                guard press.modifiers.contains(.command) else { return .ignored }
+                switch press.characters.lowercased() {
+                case "a":
+                    model.selectAllFiltered()
+                    return .handled
+                default:
+                    return .ignored
+                }
+            }
             .alert("移到废纸篓？", isPresented: deleteConfirmationBinding) {
                 Button("移到废纸篓", role: .destructive) { model.confirmPendingDeletion() }
                 Button("取消", role: .cancel) { model.cancelPendingDeletion() }
@@ -45,60 +72,104 @@ struct ResultsView: View {
     /// 空格/回车：为当前选中项打开独立预览窗口（同一资源重复触发只会聚焦已有窗口）
     private func openSelectedPreview() {
         guard let item = model.selectionForPreview else { return }
-        model.select(item)
-        openWindow(id: "preview", value: item)
+        model.openPreview(item)
+        openWindow(id: "preview")
     }
 
     // MARK: - 卡片列表（无头部，内容区直接铺列表）
 
     private var cardList: some View {
-        ScrollView {
-            GlassEffectContainer(spacing: 10) {
+        // body 求值时只过滤一次，避免 ForEach / emptyState 各自重算整个列表
+        let list = model.filteredItems
+
+        return ScrollViewReader { proxy in
+            ScrollView {
+                // 不要用 GlassEffectContainer 包住懒加载列表：滚动时行不断创建/销毁，
+                // 容器会在每次布局变化时重建整块玻璃合成层，表现为 cell 闪一下。
                 LazyVStack(spacing: 10) {
-                    ForEach(Array(model.filteredItems.enumerated()), id: \.element.id) { index, item in
-                        ResultCard(item: item, index: index)
+                    ForEach(list) { item in
+                        ResultCard(item: item)
                             .id(item.id)
                     }
-                    if model.filteredItems.isEmpty {
+                    if list.isEmpty {
                         emptyState
                     }
                 }
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+                .padding(.bottom, 16)
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
-            .padding(.bottom, 16)
+            // 硬边裁切：列表贴到导航栏时不产生模糊透出
+            .scrollEdgeEffectStyle(.hard, for: .top)
+            .onChange(of: model.activeSelectionID) { _, id in
+                guard let id else { return }
+                withAnimation(.easeOut(duration: 0.15)) {
+                    proxy.scrollTo(id, anchor: .center)
+                }
+            }
         }
-        // 硬边裁切：列表贴到导航栏时不产生模糊透出
-        .scrollEdgeEffectStyle(.hard, for: .top)
         .background(Color.lumberCanvas)
     }
 
     private var emptyState: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "sparkles")
+        VStack(spacing: 12) {
+            Image(systemName: model.visibleItems.isEmpty ? "sparkles" : "line.3.horizontal.decrease.circle")
                 .font(.system(size: 28))
                 .foregroundStyle(.tertiary)
-            Text(model.visibleItems.isEmpty ? "没有发现未引用的资源" : "没有匹配的筛选结果")
+            Text(emptyStateText)
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
+
+            if model.visibleItems.isEmpty {
+                if model.sessionIgnored.isEmpty {
+                    Button("打开其他工程…") {
+                        model.backToHome()
+                        model.chooseProject()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                } else {
+                    Button("恢复全部忽略（\(model.sessionIgnored.count)）") {
+                        model.restoreAllIgnored()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            } else {
+                Button("清除筛选与搜索") {
+                    model.searchText = ""
+                    model.filter = nil
+                    model.reviewOnly = false
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 60)
     }
+
+    private var emptyStateText: String {
+        if !model.visibleItems.isEmpty { return "没有匹配的筛选结果" }
+        if !model.sessionIgnored.isEmpty { return "当前结果已全部忽略" }
+        return "没有发现未引用的资源"
+    }
 }
 
-// MARK: - 导航栏右侧控件（筛选下拉 + 操作菜单 + 重新扫描）
+// MARK: - 导航栏右侧控件（搜索 + 筛选 + 操作菜单 + 重新扫描 + 返回首页）
 
 struct ResultsNavControls: View {
     @Environment(AppModel.self) private var model
     @State private var showIgnoredSheet = false
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         HStack(spacing: 6) {
-            if !model.sessionIgnored.isEmpty { ignoredEntry }
+            searchField
             filterMenu
             actionsMenu
             refreshButton
+            homeButton
         }
         // 非透明底：整行放在一块深色板上，避免和卡片区穿帮
         .padding(.horizontal, 8)
@@ -111,9 +182,51 @@ struct ResultsNavControls: View {
         .sheet(isPresented: $showIgnoredSheet) {
             IgnoredItemsSheet()
         }
+        .onChange(of: model.searchFocusRequest) { _, _ in
+            searchFocused = true
+        }
     }
 
-    // MARK: 筛选下拉
+    // MARK: 搜索
+
+    private var searchField: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.secondary)
+            TextField("搜索名称 / 路径", text: Binding(
+                get: { model.searchText },
+                set: { model.searchText = $0 }
+            ))
+            .textFieldStyle(.plain)
+            .font(.system(size: 11))
+            .frame(width: 104)
+            .focused($searchFocused)
+            .onSubmit {
+                searchFocused = false
+                model.requestListFocus()
+            }
+            if !model.searchText.isEmpty {
+                Button {
+                    model.searchText = ""
+                    searchFocused = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 9))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tertiary)
+                .help("清除搜索")
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.primary.opacity(0.055), in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5))
+        .help("搜索资源名或相对路径（⌘F）")
+    }
+
+    // MARK: 筛选 + 排序 + 待确认开关
 
     /// 下拉里每个分组带数量（待确认开关生效后也相应变化，搜索词不影响分组数量）
     private func groupLabel(for type: ResourceType?) -> String {
@@ -140,6 +253,21 @@ struct ResultsNavControls: View {
                 get: { model.reviewOnly },
                 set: { model.reviewOnly = $0 }
             ))
+
+            Divider()
+
+            Menu("排序：\(model.sortOption.rawValue)") {
+                Picker("排序", selection: Binding(
+                    get: { model.sortOption },
+                    set: { model.sortOption = $0 }
+                )) {
+                    ForEach(SortOption.allCases) { option in
+                        Text(option.rawValue).tag(option)
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            }
         } label: {
             HStack(spacing: 4) {
                 Text(groupLabel(for: model.filter))
@@ -156,19 +284,40 @@ struct ResultsNavControls: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("按类型筛选")
+        .help("按类型筛选 / 排序 / 只看待确认")
     }
 
     // MARK: 批量操作
 
     private var actionsMenu: some View {
         Menu {
-            Button("全部忽略") { model.ignoreAll() }
-                .disabled(model.visibleItems.isEmpty)
-            Button("移到废纸篓（选中）") { model.requestDeleteSelected() }
+            Button("忽略当前筛选结果（\(model.filteredItems.count)）") { model.ignoreAll() }
+                .disabled(model.filteredItems.isEmpty)
+            Button("移到废纸篓（选中 \(model.selectedIDs.count)）") { model.requestDeleteSelected() }
                 .disabled(model.selectedIDs.isEmpty || model.isDeleting)
-            Button("全部移到废纸篓…") { model.requestDeleteAllVisible() }
-                .disabled(model.visibleItems.isEmpty || model.isDeleting)
+            Button("删除当前筛选结果（\(model.filteredItems.count)）…") { model.requestDeleteAllVisible() }
+                .disabled(model.filteredItems.isEmpty || model.isDeleting)
+
+            Button("全选当前结果") { model.selectAllFiltered() }
+                .disabled(model.filteredItems.isEmpty)
+            Button("取消选择") { model.clearSelection() }
+                .disabled(model.selectedIDs.isEmpty)
+
+            Divider()
+
+            Button("导出当前结果（\(model.filteredItems.count)）…") { model.exportVisibleReport() }
+                .disabled(model.filteredItems.isEmpty)
+            if !model.unavailableIDs.isEmpty {
+                Button("移除不可用项（\(model.unavailableIDs.count)）") {
+                    model.removeUnavailableFromList()
+                }
+            }
+
+            Divider()
+
+            Button("选择其他工程…") { model.chooseProject() }
+            Button("返回首页") { model.backToHome() }
+
             if !model.sessionIgnored.isEmpty {
                 Divider()
                 Button("查看已忽略（\(model.sessionIgnored.count)）…") { showIgnoredSheet = true }
@@ -183,28 +332,7 @@ struct ResultsNavControls: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("批量操作")
-    }
-
-    // MARK: 已忽略入口
-
-    private var ignoredEntry: some View {
-        Button {
-            showIgnoredSheet = true
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "eye.slash")
-                    .font(.system(size: 9, weight: .semibold))
-                Text("已忽略 \(model.sessionIgnored.count)")
-                    .font(.system(size: 11, weight: .medium))
-            }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 4)
-            .glassPanel(in: Capsule(), interactive: true)
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .help("查看并恢复本次扫描中忽略的条目")
+        .help("批量操作 / 导出 / 切换工程")
     }
 
     // MARK: 重新扫描
@@ -221,5 +349,21 @@ struct ResultsNavControls: View {
         }
         .buttonStyle(.plain)
         .help("重新扫描")
+    }
+
+    // MARK: 返回首页
+
+    private var homeButton: some View {
+        Button {
+            model.backToHome()
+        } label: {
+            Image(systemName: "house")
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 22, height: 22)
+                .glassPanel(in: Circle(), interactive: true)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help("返回首页，拖入或选择其他工程")
     }
 }

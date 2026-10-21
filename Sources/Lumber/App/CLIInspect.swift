@@ -19,6 +19,7 @@ enum CLIInspect {
             print("targets：\(info.targets.isEmpty ? "（无）" : info.targets.joined(separator: ", "))")
             print("主 storyboard：\(info.mainStoryboardName ?? "（未配置）")")
             print("PBXFileReference：\(info.fileReferenceCount) 个；已解析引用路径：\(info.referencedPaths.count) 个")
+            print("加入构建阶段：\(info.builtPaths.count) 个；同步根组：\(info.synchronizedRootPaths.count) 个")
             print("同 workspace 的其它工程：\(info.linkedProjects.isEmpty ? "（无）" : info.linkedProjects.joined(separator: ", "))")
             print("整目录引用：\(info.folderReferencePaths.count) 个")
             for folder in info.folderReferencePaths.prefix(10) {
@@ -46,7 +47,7 @@ enum CLIInspect {
 
             print("扫描候选资源：\(outcome.items.count) 项（索引 token \(outcome.tokenCount) 个，耗时 \(String(format: "%.2fs", outcome.seconds))）")
             print("按规则跳过：\(outcome.ignoredCount) 个文件/目录")
-            print("高置信度未引用：\(outcome.confirmedCount) 项；待确认：\(outcome.uncertainCount) 项")
+            print("高置信度未引用：\(outcome.confirmedCount) 项；待确认：\(outcome.uncertainCount) 项；未加入 target：\(outcome.notInTargetCount) 项")
             for (type, count) in outcome.typeCounts.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
                 print("  \(type.rawValue)：\(count)")
             }

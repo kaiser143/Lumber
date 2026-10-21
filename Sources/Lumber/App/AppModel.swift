@@ -14,13 +14,22 @@ final class AppModel {
     var items: [ResourceItem] = []
     var sessionIgnored: [ResourceItem] = []
     var selectedIDs: Set<UUID> = []
-    /// 锁定到某个预览窗口的资源 id（预览窗口内左右键切换时使用，不影响主窗口选中）
+    /// 单例预览窗口当前展示的资源 id（左右键切换时更新，不影响主窗口选中）
     var previewItemID: UUID?
     var filter: ResourceType?
     var searchText: String = ""
     /// 只看「待确认」条目
     var reviewOnly = false
-    var rules: [IgnoreRule] = IgnoreRule.builtIn    /// 扫描选项（设置页可调，仅本次运行有效，不持久化）
+    /// 结果列表排序方式（本次运行有效）
+    var sortOption: SortOption = .standard
+    /// 当前键盘焦点所在条目（用于方向键滚动到可视区）
+    var activeSelectionID: UUID?
+    /// 搜索框提交后请求把焦点还给列表
+    var listFocusRequest = 0
+    /// ⌘F / 菜单请求把焦点交给搜索框
+    var searchFocusRequest = 0
+    var rules: [IgnoreRule] = IgnoreRule.builtIn
+    /// 扫描选项（设置页可调，仅本次运行有效，不持久化）
     var includeCodeFiles = true
     var scanDepth = 24
     var toast: String?
@@ -28,8 +37,9 @@ final class AppModel {
 
     /// 当前解析出的工程（核心产物；mock 模式为 nil）
     var project: ProjectInfo?
-    /// 本次扫描的全部候选资源（含被引用项），供 Statistics / 重新判定使用
-    var inventory: [ResourceItem] = []
+    /// 拖入目录 / workspace 里发现多个工程时，等待用户选择
+    var pendingProjects: [URL] = []
+    var showingProjectChoice = false
     /// 删除失败的条目 id（文件已不存在 / 系统拒绝），列表里标记「不可用」
     var unavailableIDs: Set<UUID> = []
     /// 等待二次确认的批量删除
@@ -78,7 +88,7 @@ final class AppModel {
         openProject(at: URL(fileURLWithPath: path))
     }
 
-    /// UI 回归入口：`--demo=results|scanning|rules|settings` 直接落到对应界面，
+    /// UI 回归入口：`--demo=results|scanning|rules|settings|about` 直接落到对应界面，
     /// 便于逐页验收（不读写磁盘，仅填充 Mock 数据）。
     private func applyLaunchDemoIfNeeded() {
         guard let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--demo=") }) else { return }
@@ -88,12 +98,14 @@ final class AppModel {
         case "results":
             items = MockData.projectItems
             selectedIDs = items.first.map { [$0.id] } ?? []
+            activeSelectionID = items.first?.id
             progress = ScanProgress(fraction: 1, currentPath: "", scannedCount: 1_131, foundCount: items.count)
             phase = .results
         case "preview":
             items = MockData.projectItems
             if let first = items.first {
                 selectedIDs = [first.id]
+                activeSelectionID = first.id
                 previewItemID = first.id
             }
             progress = ScanProgress(fraction: 1, currentPath: "", scannedCount: 1_131, foundCount: items.count)
@@ -110,13 +122,17 @@ final class AppModel {
             page = .rules
         case "settings":
             page = .settings
+        case "about":
+            page = .about
         default:
             break
         }
     }
 
     var visibleItems: [ResourceItem] {
-        items.filter { !sessionIgnored.map(\.id).contains($0.id) }
+        guard !sessionIgnored.isEmpty else { return items }
+        let ignoredIDs = Set(sessionIgnored.map(\.id))
+        return items.filter { !ignoredIDs.contains($0.id) }
     }
 
     /// 分组下拉各分组的数量（待确认开关生效后也相应变化，搜索词不影响）
@@ -128,7 +144,9 @@ final class AppModel {
     var scopedTypeCounts: [ResourceType: Int] {
         var counts: [ResourceType: Int] = [:]
         let keyword = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        for item in scopedItems where keyword.isEmpty || item.name.localizedCaseInsensitiveContains(keyword) {
+        for item in scopedItems where keyword.isEmpty
+            || item.name.localizedCaseInsensitiveContains(keyword)
+            || item.relativePath.localizedCaseInsensitiveContains(keyword) {
             counts[item.type, default: 0] += 1
         }
         return counts
@@ -139,17 +157,37 @@ final class AppModel {
         if let filter { list = list.filter { $0.type == filter } }
         let keyword = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !keyword.isEmpty {
-            list = list.filter { $0.name.localizedCaseInsensitiveContains(keyword) }
+            list = list.filter {
+                $0.name.localizedCaseInsensitiveContains(keyword)
+                    || $0.relativePath.localizedCaseInsensitiveContains(keyword)
+            }
+        }
+        switch sortOption {
+        case .standard:
+            break
+        case .name:
+            list.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        case .size:
+            list.sort { $0.sizeBytes > $1.sizeBytes }
+        case .type:
+            list.sort {
+                if $0.type != $1.type { return $0.type.rawValue < $1.type.rawValue }
+                return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+            }
+        case .path:
+            list.sort { $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending }
         }
         return list
     }
 
+    /// 当前筛选结果的条目总大小（含待确认项）
     var totalSizeText: String {
-        let bytes = visibleItems.reduce(0) { $0 + $1.sizeBytes }
-        if bytes >= 1024 * 1024 {
-            return String(format: "%.1f MB", Double(bytes) / 1024 / 1024)
-        }
-        return "\(max(1, Int((Double(bytes) / 1024).rounded()))) KB"
+        SizeFormat.text(filteredItems.reduce(0) { $0 + $1.sizeBytes })
+    }
+
+    /// 当前筛选结果里高置信度未引用的总大小（不含待确认 / 未加入 target）
+    var reclaimableSizeText: String {
+        SizeFormat.text(filteredItems.filter(\.isConfirmedUnused).reduce(0) { $0 + $1.sizeBytes })
     }
 
     /// 高置信度未引用条目数（当前可见）
@@ -158,19 +196,21 @@ final class AppModel {
     /// 待确认条目数（当前可见）
     var needsReviewCount: Int { visibleItems.filter(\.needsReview).count }
 
-    /// 顶部 TopHint 文案，贴近设计稿「默认 → Q3 · 均衡」的三段结构
+    /// 导航栏顶部文案
     var topHintText: String {
         switch (page, phase) {
         case (.scan, .idle):
-            return "默认 → Lumber · 冗余扫描"
+            return "Lumber · 冗余扫描"
         case (.scan, .scanning):
-            return "默认 → \(projectTitle) · 扫描中"
+            return "\(projectTitle) · 扫描中"
         case (.scan, .results):
-            return "默认 → \(projectTitle) · \(confirmedUnusedCount) 项未引用 · \(needsReviewCount) 待确认"
+            return "\(projectTitle) · \(confirmedUnusedCount) 未引用 · \(needsReviewCount) 待确认 · \(totalSizeText)（可释放 \(reclaimableSizeText)）"
         case (.rules, _):
-            return "默认 → 忽略规则 · .gitignore 语法"
+            return "忽略规则 · .gitignore 语法"
         case (.settings, _):
-            return "默认 → 设置 · 规则已持久化"
+            return "设置 · 规则已持久化"
+        case (.about, _):
+            return "关于 Lumber · 本地解析 · 零依赖"
         }
     }
 
@@ -186,11 +226,7 @@ final class AppModel {
 
     /// 待确认删除项的总大小
     var pendingDeletionSizeText: String {
-        let bytes = pendingDeletion.reduce(0) { $0 + $1.sizeBytes }
-        if bytes >= 1024 * 1024 {
-            return String(format: "%.1f MB", Double(bytes) / 1024 / 1024)
-        }
-        return "\(max(1, Int((Double(bytes) / 1024).rounded()))) KB"
+        SizeFormat.text(pendingDeletion.reduce(0) { $0 + $1.sizeBytes })
     }
 
     // MARK: - 模拟扫描（--mock 模式，保留用于 UI 回归）
@@ -230,6 +266,7 @@ final class AppModel {
             if Task.isCancelled { return }
             items = result
             selectedIDs = result.first.map { [$0.id] } ?? []
+            activeSelectionID = result.first?.id
             phase = .results
         }
     }
@@ -240,7 +277,6 @@ final class AppModel {
         phase = .idle
         progress = ScanProgress()
         project = nil
-        inventory = []
     }
 
     func backToHome() {
@@ -250,7 +286,6 @@ final class AppModel {
         projectName = ""
         progress = ScanProgress()
         project = nil
-        inventory = []
         resetScanState()
     }
 
@@ -260,6 +295,7 @@ final class AppModel {
         items = []
         sessionIgnored = []
         selectedIDs = []
+        activeSelectionID = nil
         previewItemID = nil
         searchText = ""
         filter = nil
@@ -267,30 +303,50 @@ final class AppModel {
         unavailableIDs = []
         pendingDeletion = []
         showingDeleteConfirm = false
+        pendingProjects = []
+        showingProjectChoice = false
         progress = ScanProgress()
     }
 
     // MARK: - Toast
+    //
+    // 用递增 token 而不是比较文案：连续两次相同提示时，前一个延时任务不会提前清掉后一个。
+
+    private var toastToken = 0
 
     func showToast(_ message: String) {
+        toastToken += 1
+        let token = toastToken
         toast = message
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
-            if toast == message { toast = nil }
+            if toastToken == token { toast = nil }
         }
     }
 
     // MARK: - 拖放错误提示（不弹窗，4 秒后自动恢复）
 
+    private var dropErrorToken = 0
+
     func presentDropError(_ message: String) {
+        dropErrorToken += 1
+        let token = dropErrorToken
         dropError = message
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 4_000_000_000)
-            if dropError == message { dropError = nil }
+            if dropErrorToken == token { dropError = nil }
         }
     }
 
     func clearDropError() {
         dropError = nil
+    }
+
+    func requestListFocus() {
+        listFocusRequest += 1
+    }
+
+    func requestSearchFocus() {
+        searchFocusRequest += 1
     }
 }

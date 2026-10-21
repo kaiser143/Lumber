@@ -10,8 +10,8 @@ struct RootView: View {
         // 侧边栏全高延伸到窗口顶部；标题文字放在导航栏（内容区顶部固定条带）
         NavigationSplitView(columnVisibility: .constant(.all), preferredCompactColumn: .constant(.detail)) {
             SidebarView()
-                // 窄到让窗口红黄绿（x 12..70，中心 41）看起来正好落在侧栏中线上
-                .navigationSplitViewColumnWidth(min: 64, ideal: 68, max: 78)
+                // 固定宽度 86pt，不允许用户拖动调整（min/ideal/max 相等即锁定）
+                .navigationSplitViewColumnWidth(82)
         } detail: {
             DetailView()
         }
@@ -20,11 +20,10 @@ struct RootView: View {
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         // 窗口标题跟随当前工程（隐藏标题栏后仍用于窗口菜单 / Mission Control）
         .background(WindowTitleAccessor(title: model.windowTitle))
-        // --demo=preview：启动即弹出一个独立预览窗口，便于验收
+        // --demo=preview：启动即弹出预览窗口，便于验收
         .task {
-            if let id = model.previewItemID,
-               let item = model.items.first(where: { $0.id == id }) {
-                openWindow(id: "preview", value: item)
+            if model.previewItemID != nil {
+                openWindow(id: "preview")
             }
         }
     }
@@ -37,15 +36,24 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            SidebarButton(icon: "tray.and.arrow.down", tip: "扫描", isActive: model.page == .scan) {
-                model.page = .scan
+            SidebarButton(
+                icon: "tray.and.arrow.down",
+                tip: model.page == .scan && model.phase == .results ? "扫描 · 返回首页" : "扫描",
+                isActive: model.page == .scan
+            ) {
+                // 已经在结果页时，再点「扫描」表示开始一个新工程；从规则/设置页返回则保留结果。
+                if model.page == .scan, model.phase == .results {
+                    model.backToHome()
+                } else {
+                    model.page = .scan
+                }
             }
             SidebarButton(icon: "eye.slash", tip: "忽略规则", isActive: model.page == .rules) {
                 model.page = .rules
             }
             Spacer()
-            SidebarButton(icon: "info.circle", tip: "关于", isActive: false) {
-                model.showToast("Lumber · Xcode 工程冗余资源清理工具")
+            SidebarButton(icon: "info.circle", tip: "关于", isActive: model.page == .about) {
+                model.page = .about
             }
             SidebarButton(icon: "slider.horizontal.3", tip: "设置", isActive: model.page == .settings) {
                 model.page = .settings
@@ -85,7 +93,7 @@ struct SidebarButton: View {
     }
 }
 
-// MARK: - 主区域：TopHint + 页面路由 + Toast
+// MARK: - 主区域：导航栏 + 页面路由 + Toast
 
 struct DetailView: View {
     @Environment(AppModel.self) private var model
@@ -102,6 +110,7 @@ struct DetailView: View {
                     }
                 case .rules: IgnoreRulesView()
                 case .settings: SettingsView()
+                case .about: AboutView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -112,12 +121,33 @@ struct DetailView: View {
         .ignoresSafeArea(edges: .top)
         .background(Color.lumberCanvas)
         .overlay(alignment: .bottom) {
-            if let toast = model.toast {
-                ToastView(message: toast)
-                    .padding(.bottom, 18)
+            VStack(spacing: 8) {
+                // 首页自己会在拖放区显示红框提示；其它页面（结果页拖入、扫描中）用底部胶囊提示
+                if let error = model.dropError, !(model.page == .scan && model.phase == .idle) {
+                    Text(error)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(Color.red.opacity(0.10), in: Capsule())
+                        .overlay(Capsule().strokeBorder(Color.red.opacity(0.35), lineWidth: 0.5))
+                        .transition(.opacity)
+                }
+                if let toast = model.toast {
+                    ToastView(message: toast)
+                }
             }
+            .padding(.bottom, 18)
         }
         .animation(.easeOut(duration: 0.2), value: model.toast == nil)
+        .animation(.easeOut(duration: 0.2), value: model.dropError)
+        .sheet(isPresented: Binding(
+            get: { model.showingProjectChoice },
+            set: { if !$0 { model.cancelProjectChoice() } }
+        )) {
+            ProjectChoiceSheet()
+        }
     }
 
     /// 与窗口红黄绿同高的导航栏高度
@@ -126,16 +156,23 @@ struct DetailView: View {
     // MARK: - 导航栏（标题居中 + 结果页右侧控件）
 
     private var navBar: some View {
-        ZStack {
-            Text(model.topHintText)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .allowsHitTesting(false)
-
-            HStack(spacing: 6) {
-                Spacer()
-                if model.page == .scan, model.phase == .results {
+        Group {
+            if model.page == .scan, model.phase == .results {
+                HStack(spacing: 10) {
+                    Text(model.topHintText)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 6)
                     ResultsNavControls()
+                }
+            } else {
+                ZStack {
+                    Text(model.topHintText)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .allowsHitTesting(false)
                 }
             }
         }

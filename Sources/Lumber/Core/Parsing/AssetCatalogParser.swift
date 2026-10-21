@@ -25,11 +25,14 @@ enum AssetCatalogParser {
                 continue
             }
             enumerator.skipDescendants()
+            let contents = inspectDirectory(in: url)
             entries.append(AssetEntry(
                 name: url.deletingPathExtension().lastPathComponent,
                 kind: kind,
                 url: url,
-                fileNames: containedFileNames(in: url)
+                fileNames: contents.fileNames,
+                totalSizeBytes: contents.totalSizeBytes,
+                representativeURL: contents.representativeURL
             ))
         }
 
@@ -37,23 +40,50 @@ enum AssetCatalogParser {
         return AssetCatalogInfo(url: catalogURL, relativePath: relativePath, entries: entries)
     }
 
-    /// 目录内实际存在的文件名 + Contents.json 里登记的文件名（去重）
-    private static func containedFileNames(in directory: URL) -> [String] {
+    private struct DirectoryContents {
+        var fileNames: [String] = []
+        var totalSizeBytes = 0
+        var representativeURL: URL?
+    }
+
+    /// 目录内实际存在的文件名 + Contents.json 里登记的文件名（去重），同时统计体积与预览代表文件
+    private static func inspectDirectory(in directory: URL) -> DirectoryContents {
+        var result = DirectoryContents()
         var names: Set<String> = []
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .fileSizeKey]
         let contents = (try? FileManager.default.contentsOfDirectory(
             at: directory,
-            includingPropertiesForKeys: [.isRegularFileKey],
+            includingPropertiesForKeys: Array(keys),
             options: [.skipsHiddenFiles]
         )) ?? []
 
-        for url in contents where url.lastPathComponent != "Contents.json" {
+        var bestImageSize = -1
+        for url in contents {
+            guard (try? url.resourceValues(forKeys: keys))?.isRegularFile == true else { continue }
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+            result.totalSizeBytes += size
+            guard url.lastPathComponent != "Contents.json" else { continue }
             names.insert(url.lastPathComponent)
+            if ResourceClassifier.type(for: url) == .image, size > bestImageSize {
+                bestImageSize = size
+                result.representativeURL = url
+            }
+        }
+
+        if result.representativeURL == nil {
+            result.representativeURL = contents
+                .filter { $0.lastPathComponent != "Contents.json" }
+                .max {
+                    ((try? $0.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+                        < ((try? $1.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+                }
         }
 
         if let json = contentsJSONFileNames(in: directory) {
             names.formUnion(json)
         }
-        return names.sorted()
+        result.fileNames = names.sorted()
+        return result
     }
 
     private static func contentsJSONFileNames(in directory: URL) -> [String]? {

@@ -6,14 +6,23 @@ import ImageIO
 // 列表缩略图与预览大图都从这里取：用 ImageIO 直接解码到目标尺寸，
 // 避免把几百 MB 的工程原图整张读进内存。
 
+/// NSCache 本身线程安全，单独抽出来放在 actor 之外，
+/// 让列表视图能在主线程同步命中缓存（滚动复用 cell 时立即出图，不闪空白）。
+private final class ImageCache: @unchecked Sendable {
+    static let shared = ImageCache()
+    let images = NSCache<NSString, NSImage>()
+
+    private init() {
+        images.countLimit = 400
+        // 预览大图按 2400px 解码，单张可达数十 MB；只限条数会在浏览大量工程时堆出上 GB 内存
+        images.totalCostLimit = 256 * 1024 * 1024
+    }
+}
+
 actor ImageStore {
     static let shared = ImageStore()
 
-    private let cache = NSCache<NSString, NSImage>()
-
-    private init() {
-        cache.countLimit = 300
-    }
+    private let cache = ImageCache.shared.images
 
     /// 列表缩略图
     func thumbnail(for item: ResourceItem, maxPixel: CGFloat = 120) async -> NSImage? {
@@ -27,13 +36,26 @@ actor ImageStore {
         return await image(at: item.absolutePath, maxPixel: maxPixel)
     }
 
+    /// 同步查询已解码好的缩略图（未命中返回 nil，调用方再走异步加载）
+    nonisolated func cachedThumbnail(for item: ResourceItem, maxPixel: CGFloat = 120) -> NSImage? {
+        guard !item.absolutePath.isEmpty else { return nil }
+        return ImageCache.shared.images.object(forKey: Self.cacheKey(path: item.absolutePath, maxPixel: maxPixel))
+    }
+
     func image(at path: String, maxPixel: CGFloat) async -> NSImage? {
-        let key = "\(path)|\(Int(maxPixel))" as NSString
+        let key = Self.cacheKey(path: path, maxPixel: maxPixel)
         if let cached = cache.object(forKey: key) { return cached }
 
         let image = Self.decode(path: path, maxPixel: maxPixel)
-        if let image { cache.setObject(image, forKey: key) }
+        if let image {
+            let cost = Int(image.size.width * image.size.height * 4)
+            cache.setObject(image, forKey: key, cost: cost)
+        }
         return image
+    }
+
+    private nonisolated static func cacheKey(path: String, maxPixel: CGFloat) -> NSString {
+        "\(path)|\(Int(maxPixel))" as NSString
     }
 
     private static func decode(path: String, maxPixel: CGFloat) -> NSImage? {

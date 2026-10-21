@@ -42,7 +42,9 @@ enum ProjectLoader {
             rootDirectory: graph.rootDirectory,
             targets: graph.targets,
             referencedPaths: graph.referencedPaths.union(linked.referencedPaths),
+            builtPaths: graph.builtPaths.union(linked.builtPaths),
             folderReferencePaths: graph.folderReferencePaths + linked.folderReferencePaths,
+            synchronizedRootPaths: graph.synchronizedRootPaths + linked.synchronizedRootPaths,
             assetCatalogs: catalogs,
             mainStoryboardName: graph.mainStoryboardName ?? mainStoryboard(in: graph.infoPlistPaths),
             referencedResourceNames: graph.buildSettingResourceNames.union(plistNames).union(linked.resourceNames),
@@ -55,7 +57,9 @@ enum ProjectLoader {
 
     private struct LinkedReferences {
         var referencedPaths: Set<String> = []
+        var builtPaths: Set<String> = []
         var folderReferencePaths: [String] = []
+        var synchronizedRootPaths: [String] = []
         var assetCatalogURLs: [URL] = []
         var resourceNames: Set<String> = []
         var fileReferenceCount: Int = 0
@@ -72,7 +76,9 @@ enum ProjectLoader {
                   let text = decode(data),
                   let graph = try? PBXProjectGraph.build(xcodeprojURL: projectURL, pbxprojText: text) else { continue }
             result.referencedPaths.formUnion(graph.referencedPaths)
+            result.builtPaths.formUnion(graph.builtPaths)
             result.folderReferencePaths.append(contentsOf: graph.folderReferencePaths)
+            result.synchronizedRootPaths.append(contentsOf: graph.synchronizedRootPaths)
             result.assetCatalogURLs.append(contentsOf: graph.assetCatalogURLs)
             result.resourceNames.formUnion(graph.buildSettingResourceNames)
             result.fileReferenceCount += graph.fileReferenceCount
@@ -110,7 +116,15 @@ enum ProjectLoader {
         return projectURLs(inWorkspaceText: text, base: workspace.deletingLastPathComponent())
     }
 
-    private static func projectURLs(inWorkspaceText text: String, base directory: URL) -> [URL] {
+    /// 从 .xcworkspace 的 contents.xcworkspacedata 里解析出所有 .xcodeproj
+    static func projectURLs(inWorkspaceAt workspaceURL: URL) -> [URL] {
+        let dataURL = workspaceURL.appending(path: "contents.xcworkspacedata")
+        guard let data = FileManager.default.contents(atPath: dataURL.path),
+              let text = String(data: data, encoding: .utf8) else { return [] }
+        return projectURLs(inWorkspaceText: text, base: workspaceURL.deletingLastPathComponent())
+    }
+
+    static func projectURLs(inWorkspaceText text: String, base directory: URL) -> [URL] {
         let pattern = #"location\s*=\s*"([^"]+)""#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
         let nsText = text as NSString
@@ -206,11 +220,21 @@ enum ProjectLoader {
                 guard (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else { continue }
                 if name.hasSuffix(".xcassets") {
                     enumerator.skipDescendants()
-                    if !catalogs.contains(url) { catalogs.append(url) }
+                    catalogs.append(url)
                 }
             }
         }
-        return catalogs.map(\.standardizedFileURL)
+
+        // 引用表里的 URL 与磁盘遍历拿到的 URL 可能只差末尾斜杠 / 标准化形式，统一按路径去重
+        var seen: Set<String> = []
+        var unique: [URL] = []
+        for url in catalogs {
+            let standardized = url.standardizedFileURL
+            if seen.insert(standardized.path).inserted {
+                unique.append(standardized)
+            }
+        }
+        return unique
     }
 
     private static func relativePath(of url: URL, in root: URL) -> String {

@@ -6,9 +6,6 @@ struct ResultCard: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openWindow) private var openWindow
     let item: ResourceItem
-    let index: Int
-
-    @State private var trashHovered = false
 
     private var isSelected: Bool { model.selectedIDs.contains(item.id) }
     /// 删除失败 / 目标已被外部移动
@@ -24,29 +21,49 @@ struct ResultCard: View {
         .padding(.leading, 10)
         .padding(.trailing, 12)
         .padding(.vertical, 8)
+        // 静态玻璃：不加 interactive。interactive 玻璃会持续跟随指针重绘，
+        // 滚动时行从指针下方经过会不停触发，是 cell 闪烁的主要来源之一。
         .glassPanel(
             cornerRadius: 14,
-            tint: isSelected ? Color.lumberAccent.opacity(0.22) : nil,
-            interactive: true
+            tint: isSelected ? Color.lumberAccent.opacity(0.22) : nil
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(
-                    isSelected ? Color.lumberAccent.opacity(0.85) : Color.white.opacity(0.001),
-                    lineWidth: 1.4
-                )
+            // 仅选中时叠描边：未选中行不额外创建描边图层，滚动时少一层离屏合成
+            selectBorder
         )
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .onTapGesture { model.select(item) }
+        .onTapGesture { handleTap() }
         .onTapGesture(count: 2) { openPreviewWindow() }
         .help(item.note.map { "\(item.relativePath)\n\($0)" } ?? item.relativePath)
         .animation(.easeOut(duration: 0.16), value: isSelected)
     }
 
+    /// 纯点击单选；⌘ 点击多选；Shift 点击区间选择
+    private func handleTap() {
+        let modifiers = NSEvent.modifierFlags
+        if modifiers.contains(.command) {
+            model.toggleSelection(item)
+        } else if modifiers.contains(.shift) {
+            model.extendSelection(to: item)
+        } else {
+            model.select(item)
+        }
+        // 点击行后把键盘焦点交还列表，方向键 / 空格 / Delete 才能继续工作
+        model.requestListFocus()
+    }
+
     /// 打开独立预览窗口（同一资源重复打开只会聚焦该窗口）
     private func openPreviewWindow() {
-        model.select(item)
-        openWindow(id: "preview", value: item)
+        model.openPreview(item)
+        openWindow(id: "preview")
+    }
+
+    @ViewBuilder
+    private var selectBorder: some View {
+        if isSelected {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.lumberAccent.opacity(0.85), lineWidth: 1.4)
+        }
     }
 
     // MARK: - 缩略图（点击打开预览窗口）
@@ -68,6 +85,8 @@ struct ResultCard: View {
                     .lineLimit(1).truncationMode(.middle)
                 if isUnavailable {
                     unavailableBadge
+                } else if item.notInTarget {
+                    notInTargetBadge
                 } else if item.isConfirmedUnused {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 12))
@@ -106,6 +125,22 @@ struct ResultCard: View {
         .help(item.note ?? "存在模糊信号，建议人工确认后再删除")
     }
 
+    /// 工程里有、但没有加入 target 构建阶段：不会进包，通常是漏配
+    private var notInTargetBadge: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "target")
+                .font(.system(size: 10, weight: .semibold))
+            Text("未加入 target")
+                .font(.system(size: 9, weight: .semibold))
+        }
+        .foregroundStyle(.blue)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 1.5)
+        .background(Capsule().fill(Color.blue.opacity(0.14)))
+        .overlay(Capsule().strokeBorder(Color.blue.opacity(0.35), lineWidth: 0.5))
+        .help(item.note ?? "在工程导航器中，但没有加入任何 target 构建阶段")
+    }
+
     /// 删除失败 / 目标已不存在
     private var unavailableBadge: some View {
         HStack(spacing: 3) {
@@ -132,7 +167,9 @@ struct ResultCard: View {
             GhostCircleButton(symbol: "folder", help: "在 Finder 中显示") {
                 revealInFinder()
             }
-            trashButton
+            TrashButton(isUnavailable: isUnavailable) {
+                model.requestDelete([item])
+            }
         }
     }
 
@@ -153,31 +190,12 @@ struct ResultCard: View {
         let target = item.directoryPath ?? item.absolutePath
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: target)])
     }
-
-    /// 圆形删除按钮：液态玻璃 + 深色，悬停变红；真实移入系统废纸篓
-    private var trashButton: some View {
-        Button { model.requestDelete([item]) } label: {
-            Image(systemName: "trash")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 24, height: 24)
-                .glassPanel(
-                    in: Circle(),
-                    tint: trashHovered ? Color.red : Color.black.opacity(0.72),
-                    interactive: true
-                )
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .help(isUnavailable ? "目标已不存在，无法删除" : "移到废纸篓（可从废纸篓恢复）")
-        .disabled(isUnavailable)
-        .opacity(isUnavailable ? 0.4 : 1)
-        .onHover { trashHovered = $0 }
-        .animation(.easeOut(duration: 0.15), value: trashHovered)
-    }
 }
 
-// MARK: - 圆形玻璃图标按钮（各自独立悬停态，避免一行里多个按钮同时变亮）
+// MARK: - 圆形图标按钮（各自独立悬停态，避免一行里多个按钮同时变亮）
+//
+// 这里刻意不用 glassEffect：每行 4 个玻璃层 × 上百行，滚动时合成压力极大；
+// 小圆形按钮改用带高光描边的半透明填充，观感接近但滚动稳定得多。
 
 private struct GhostCircleButton: View {
     let symbol: String
@@ -192,11 +210,50 @@ private struct GhostCircleButton: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(isHovering ? Color.primary : Color.secondary)
                 .frame(width: 28, height: 28)
-                .glassPanel(in: Circle(), interactive: true)
+                .background(
+                    Circle().fill(Color.primary.opacity(isHovering ? 0.12 : 0.055))
+                )
+                .overlay(
+                    Circle().strokeBorder(Color.white.opacity(0.16), lineWidth: 0.5)
+                )
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .help(help)
+        .accessibilityLabel(help)
+        .onHover { isHovering = $0 }
+    }
+}
+
+// MARK: - 圆形删除按钮（深色底 + 悬停变红）
+
+private struct TrashButton: View {
+    let isUnavailable: Bool
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "trash")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 24, height: 24)
+                .background(
+                    Circle().fill(
+                        isHovering ? Color.red : Color.black.opacity(0.72)
+                    )
+                )
+                .overlay(
+                    Circle().strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5)
+                )
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(isUnavailable ? "目标已不存在，无法删除" : "移到废纸篓（可从废纸篓恢复）")
+        .accessibilityLabel(isUnavailable ? "目标已不存在" : "移到废纸篓")
+        .disabled(isUnavailable)
+        .opacity(isUnavailable ? 0.4 : 1)
         .onHover { isHovering = $0 }
     }
 }

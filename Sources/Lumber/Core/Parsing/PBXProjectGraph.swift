@@ -4,6 +4,7 @@ import Foundation
 //
 // 从字典树里提炼出「工程引用表」：
 // · referencedPaths        被 pbxproj 引用的文件绝对路径
+// · builtPaths             出现在 PBXBuildFile 里、真正参与 target 构建的路径
 // · folderReferencePaths   整目录引用（folder reference / Xcode 16 同步文件夹）
 // · targets / 主 storyboard / Assets.xcassets 位置
 //
@@ -12,7 +13,7 @@ import Foundation
 //    子项真实路径相对「variant group 的上一级目录」，因此拼接时跳过它。
 // 2. sourceTree 为 BUILT_PRODUCTS_DIR / SDKROOT / DEVELOPER_DIR 的引用不在源码树内，
 //    直接忽略（它们不是用户磁盘上的资源）。
-// 3. PBXFileSystemSynchronizedRootGroup（Xcode 16 同步文件夹）按「整目录被引用」处理，
+// 3. PBXFileSystemSynchronizedRootGroup（Xcode 16 同步文件夹）按「整目录被引用 + 自动加入 target」处理，
 //    其 exceptions 不做进一步区分。
 // 4. 只读取第一个 rootObject，嵌套工程（子工程 .xcodeproj）不递归解析。
 
@@ -22,7 +23,11 @@ struct PBXProjectGraph {
     let rootDirectory: URL
     let targets: [String]
     let referencedPaths: Set<String>
+    /// 出现在 PBXBuildFile 里、真正参与 target 构建的路径（含 folder reference / variant group 子项）
+    let builtPaths: Set<String>
     let folderReferencePaths: [String]
+    /// Xcode 16 同步根组（由 Xcode 自动加入 target）
+    let synchronizedRootPaths: [String]
     let assetCatalogURLs: [URL]
     let mainStoryboardName: String?
     /// 构建配置里声明的资源名（Infoplist 键、AppIcon 名等），这些名字必须视为被引用
@@ -52,6 +57,7 @@ extension PBXProjectGraph {
 
         var referencedPaths: Set<String> = []
         var folderReferencePaths: [String] = []
+        var synchronizedRootPaths: [String] = []
         var assetCatalogURLs: [URL] = []
         var fileReferenceCount = 0
 
@@ -75,6 +81,7 @@ extension PBXProjectGraph {
                 guard let path = resolver.resolve(id) else { continue }
                 referencedPaths.insert(path)
                 folderReferencePaths.append(path)
+                synchronizedRootPaths.append(path)
             default:
                 continue
             }
@@ -86,13 +93,50 @@ extension PBXProjectGraph {
             rootDirectory: rootDirectory,
             targets: targetNames(objects: objects, projectObject: projectObject),
             referencedPaths: referencedPaths,
+            builtPaths: builtFilePaths(objects: objects, resolver: resolver),
             folderReferencePaths: folderReferencePaths,
+            synchronizedRootPaths: synchronizedRootPaths,
             assetCatalogURLs: assetCatalogURLs,
             mainStoryboardName: mainStoryboardName(objects: objects),
             buildSettingResourceNames: buildSettingResourceNames(objects: objects),
             fileReferenceCount: fileReferenceCount,
             infoPlistPaths: infoPlistPaths(objects: objects, rootDirectory: rootDirectory)
         )
+    }
+
+    /// PBXBuildFile.fileRef → 已解析的绝对路径。
+    /// VariantGroup / XCVersionGroup 本身是虚拟节点，需要展开到 children 才拿得到真实文件。
+    private static func builtFilePaths(
+        objects: [String: PBXValue],
+        resolver: PathResolver
+    ) -> Set<String> {
+        var paths: Set<String> = []
+        for value in objects.values {
+            guard let dict = value.dictionaryValue,
+                  dict.string("isa") == "PBXBuildFile",
+                  let fileRef = dict.string("fileRef") else { continue }
+
+            if let ref = objects[fileRef]?.dictionaryValue {
+                let isa = ref.string("isa") ?? ""
+                if isa == "PBXVariantGroup" || isa == "XCVersionGroup",
+                   let children = ref["children"]?.arrayValue {
+                    for child in children {
+                        guard let id = child.stringValue,
+                              let path = resolver.resolve(id) else { continue }
+                        paths.insert(path)
+                    }
+                    continue
+                }
+                // fileRef 只应指向文件 / VariantGroup；指向 Group 属于损坏的 pbxproj，跳过避免把根目录当文件
+                guard isa == "PBXFileReference" else { continue }
+            } else {
+                continue
+            }
+            if let path = resolver.resolve(fileRef) {
+                paths.insert(path)
+            }
+        }
+        return paths
     }
 
     private static func infoPlistPaths(
@@ -207,6 +251,7 @@ private struct PathResolver {
     }
 
     func resolve(_ id: String) -> String? {
+        guard objects[id] != nil else { return nil }
         var components: [String] = []
         var base: URL?
         var currentID: String? = id
