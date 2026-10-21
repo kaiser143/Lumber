@@ -14,9 +14,8 @@ struct HomeView: View {
         VStack(spacing: 10) {
             Spacer()
 
-            Image(nsImage: MockImages.shared.appEmblem)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
+            LumberIcon()
+                .scaleEffect(92 / 256)
                 .frame(width: 92, height: 92)
                 .shadow(color: .black.opacity(0.22), radius: 12, y: 5)
                 .scaleEffect(hovering ? 1.04 : 1)

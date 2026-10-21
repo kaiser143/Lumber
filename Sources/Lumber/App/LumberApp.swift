@@ -1,10 +1,14 @@
 import SwiftUI
+import AppKit
 
 @main
 struct LumberApp: App {
     @State private var model = AppModel()
 
     init() {
+        let renderer = ImageRenderer(content: LumberIcon())
+        renderer.scale = 2
+        NSApplication.shared.applicationIconImage = renderer.nsImage
         // 命令行自检：--inspect <工程路径> 打印解析摘要后直接退出
         if let index = CommandLine.arguments.firstIndex(of: "--inspect"),
            index + 1 < CommandLine.arguments.count {

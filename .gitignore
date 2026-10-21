@@ -3,3 +3,7 @@
 .DS_Store
 *.xcodeproj/xcuserdata/
 xcuserdata/
+Lumber-Cursor-Prompt.md
+
+.vscode/
+dist/
