@@ -1,5 +1,9 @@
 # Lumber
 
+<p align="center">
+  <img src="docs/images/screenshot-home.png" width="760" alt="Lumber 主界面：把 .xcodeproj 或文件夹拖进窗口即可开始扫描">
+</p>
+
 Lumber 是一款 macOS 原生应用，用于扫描 Xcode 工程里**没有被引用的冗余资源**——图片、颜色、数据集、XIB / Storyboard、代码文件等——并支持预览、忽略、多选、导出报告和一键移入废纸篓。
 
 界面基于 SwiftUI + Liquid Glass，工程解析与引用判定全部由零依赖的 Swift 代码完成，不依赖 Xcode 命令行工具，也不会修改工程文件。

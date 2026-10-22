@@ -49,12 +49,18 @@ struct PreviewView: View {
     private static let imageCorner: CGFloat = 12
     /// 窗口最大尺寸占屏幕可视区的比例
     ///
-    /// 预览属于「看内容」的窗口，按 HIG 的可用性要求不能顶满屏幕：
-    /// 四周各留 5%，既保证内容够大，又能看到桌面、方便拖动窗口和察觉背后的其它窗口。
+    /// 预览属于「看内容」的窗口，不能顶满屏幕。竖构图资源（如 1104×2400）
+    /// 受高度约束，如果按 90% 计算窗口会几乎顶到菜单栏和 Dock，观感「太高」；
+    /// 取 80%，长图依然足够大，又能明显看出窗口四周还有桌面。
     /// 屏幕可视区（visibleFrame）本身已扣除菜单栏与 Dock。
-    private static let maxScreenFraction: CGFloat = 0.9
+    private static let maxScreenFraction: CGFloat = 0.8
     /// 窗口最小尺寸，与 LumberApp 里预览窗口的 frame 下限保持一致
     private static let minWindowSize = NSSize(width: 300, height: 260)
+    /// 代码（含 XIB / Storyboard）预览的默认窗口尺寸
+    ///
+    /// 代码是正文型内容，不适合像图片那样按内容比例收缩；给一个固定的舒适尺寸，
+    /// 之后完全交给用户手动拉伸，切换文件不会把用户调好的尺寸改回去。
+    private static let codeDefaultSize = NSSize(width: 960, height: 640)
 
     @State private var currentItem: ResourceItem
     @State private var zoom: CGFloat = 1
@@ -67,6 +73,9 @@ struct PreviewView: View {
     @State private var loadedImage: NSImage?
     /// 真实文本内容（代码 / XIB / Storyboard），mock 条目为 nil
     @State private var loadedText: String?
+    /// 已经套用过默认尺寸的预览种类：只在内容类型切换时套一次，
+    /// 同类型内切换文件保留用户手动拉伸后的窗口尺寸。
+    @State private var sizedKind: PreviewKind?
     /// 窗口当前请求展示的条目（由 PreviewWindow 传入；切换资源时更新，但不重建整个视图）
     private let incomingItem: ResourceItem
 
@@ -88,7 +97,7 @@ struct PreviewView: View {
         .background(PreviewWindowAccessor { window in
             hostWindow = window
             applyWindowLimits(window)
-            fitWindowToImage(window)
+            syncWindowSize(window)
             installKeyMonitor(for: window)
         })
         .onDisappear { removeKeyMonitor() }
@@ -96,7 +105,7 @@ struct PreviewView: View {
             // 换到更小的屏幕时，上限和当前尺寸都要重新收一遍
             guard let window = note.object as? NSWindow, window === hostWindow else { return }
             applyWindowLimits(window)
-            fitWindowToImage(window)
+            syncWindowSize(window)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
             // 关闭后重新打开同一个 Window 场景时，确保键盘监视器仍然在位
@@ -136,7 +145,7 @@ struct PreviewView: View {
         case .color, .data, .other:
             break
         }
-        if let hostWindow { fitWindowToImage(hostWindow) }
+        if let hostWindow { syncWindowSize(hostWindow) }
     }
 
     /// 条目已在主窗口被忽略/删除时，窗口降级为占位
@@ -148,7 +157,7 @@ struct PreviewView: View {
         guard !isStale else { return }
         currentItem = model.stepPreview(from: currentItem, by: delta)
         resetTransform()
-        if let hostWindow { fitWindowToImage(hostWindow) }
+        if let hostWindow { syncWindowSize(hostWindow) }
     }
 
     // MARK: - 键盘事件
@@ -187,7 +196,7 @@ struct PreviewView: View {
         self.keyMonitor = nil
     }
 
-    /// 预览窗口的最大尺寸：不超过屏幕可视区的 90%，同时兜住拖拽放大与跨屏切换
+    /// 预览窗口的最大尺寸：不超过屏幕可视区的上限，同时兜住拖拽放大与跨屏切换
     private func applyWindowLimits(_ window: NSWindow) {
         let visible = (window.screen ?? NSScreen.main)?.visibleFrame
             ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
@@ -208,10 +217,48 @@ struct PreviewView: View {
         window.setFrame(resized, display: true)
     }
 
-    /// 按图片实际比例调整窗口尺寸：图片区域 = 窗口内容区 - 边距（左右 10 / 上 40 / 下 10）
+    /// 按当前内容种类同步窗口尺寸
     ///
-    /// 注意隐藏标题栏后标题栏仍然占窗口高度（约 32pt），内容区从它下面开始。
-    /// 适配时必须把这块高度加回去，否则图片区域会比预期矮一截，图片只能被裁。
+    /// - 图片：每次按图片比例自适应（不同图片比例不同）
+    /// - 代码 / 属性：只在种类切换时套用一次默认尺寸，之后交给用户拉伸，
+    ///   同类型内切换文件不会把用户调好的窗口改回去
+    private func syncWindowSize(_ window: NSWindow) {
+        switch previewKind {
+        case .image:
+            // 图片还在解码时先不动窗口，等 loadFileContent 完成后会再调一次
+            guard previewImage != nil else { return }
+            sizedKind = .image
+            fitWindowToImage(window)
+        case .code:
+            guard sizedKind != .code else { return }
+            sizedKind = .code
+            applyDefaultSize(Self.codeDefaultSize, to: window)
+        case .info:
+            sizedKind = .info
+        }
+    }
+
+    /// 套用默认窗口尺寸：保持水平中心和顶边不动，像图片适配那样从顶部向下展开
+    private func applyDefaultSize(_ size: NSSize, to window: NSWindow) {
+        let clamped = NSSize(
+            width: min(max(size.width, window.minSize.width), window.maxSize.width),
+            height: min(max(size.height, window.minSize.height), window.maxSize.height)
+        )
+        var frame = window.frame
+        guard frame.size.width != clamped.width || frame.size.height != clamped.height else { return }
+        let centerX = frame.midX
+        let topY = frame.maxY
+        frame.size = clamped
+        frame.origin.x = (centerX - clamped.width / 2).rounded()
+        frame.origin.y = topY - clamped.height
+        window.setFrame(frame, display: true)
+    }
+
+    /// 按图片实际比例调整窗口尺寸：图片区域 = 窗口全高 - 边距（左右 10 / 上 40 / 下 10）
+    ///
+    /// body 里已经把内容画布加高一个标题栏并整体上移（frame + reserve 后再 offset），
+    /// 视觉上内容铺满了整个 frame，所以这里图片能用的高度就是 frame 高减去上下边距，
+    /// 不能再额外扣 / 加标题栏，否则图片区域会白白多出 32pt，图片上下出现不对称留白。
     private func fitWindowToImage(_ window: NSWindow) {
         guard let image = previewImage else { return }
         let iw = image.size.width, ih = image.size.height
@@ -221,17 +268,16 @@ struct PreviewView: View {
             ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let horizontalInset = Self.sideInset * 2
         let verticalInset = Self.topInset + Self.sideInset
-        let titlebarHeight = max(window.frame.height - window.contentLayoutRect.height, 0)
 
         // 不超过屏幕可视区的上限，也不超过图片原始像素（避免把小图放大糊掉）
         let scale = min(
             (visible.width * Self.maxScreenFraction - horizontalInset) / iw,
-            (visible.height * Self.maxScreenFraction - verticalInset - titlebarHeight) / ih,
+            (visible.height * Self.maxScreenFraction - verticalInset) / ih,
             1
         )
 
         let targetW = max(iw * scale + horizontalInset, 280)
-        let targetH = max(ih * scale + verticalInset, 220) + titlebarHeight
+        let targetH = max(ih * scale + verticalInset, 220)
 
         var frame = window.frame
         let topY = frame.maxY
@@ -278,6 +324,21 @@ struct PreviewView: View {
             case .code, .xib: codeArea
             case .color, .data, .other: infoArea
             }
+        }
+    }
+
+    /// 预览内容的粗分类：不同种类走不同的窗口尺寸策略
+    private enum PreviewKind: Equatable {
+        case image
+        case code
+        case info
+    }
+
+    private var previewKind: PreviewKind {
+        switch currentItem.type {
+        case .image: .image
+        case .code, .xib: .code
+        case .color, .data, .other: .info
         }
     }
 
@@ -425,6 +486,10 @@ struct PreviewView: View {
                 .padding(Self.sideInset)
         }
         .scrollEdgeEffectStyle(.soft, for: .top)
+        // 与图片预览对齐：顶部留出 40pt 条带放文件名和浮动按钮，
+        // ScrollView 整体下移后滚动内容被裁在条带之下，不会滑到按钮后面。
+        .padding(.top, Self.topInset - Self.sideInset)
+        .overlay(alignment: .top) { topBar }
     }
 
     /// 真实文件内容优先；mock 条目回落到示例文本
