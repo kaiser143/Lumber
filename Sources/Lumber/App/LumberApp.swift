@@ -19,6 +19,7 @@ final class LumberAppDelegate: NSObject, NSApplicationDelegate {
 struct LumberApp: App {
     @NSApplicationDelegateAdaptor(LumberAppDelegate.self) private var appDelegate
     @State private var model = AppModel()
+    @AppStorage("lumber.sidebarVisible") private var isSidebarVisible = true
 
     init() {
         let renderer = ImageRenderer(content: LumberIcon())
@@ -37,12 +38,19 @@ struct LumberApp: App {
                 .environment(model)
                 .frame(minWidth: 620, minHeight: 460)
         }
+        .defaultSize(width: 900, height: 540)
         // 隐藏标题栏：让侧边栏材质向上延伸，红黄绿按钮浮在侧栏之上（对标图1/图2）
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("打开工程…") { model.chooseProject() }
                     .keyboardShortcut("o", modifiers: .command)
+            }
+            CommandGroup(replacing: .sidebar) {
+                Button(isSidebarVisible ? "隐藏菜单" : "显示菜单") {
+                    isSidebarVisible.toggle()
+                }
+                .keyboardShortcut("s", modifiers: [.command, .control])
             }
             CommandGroup(replacing: .appInfo) {
                 Button("关于 Lumber") { model.page = .about }
