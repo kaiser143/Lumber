@@ -55,7 +55,7 @@ struct ResultsView: View {
                 Button("移到废纸篓", role: .destructive) { model.confirmPendingDeletion() }
                 Button("取消", role: .cancel) { model.cancelPendingDeletion() }
             } message: {
-                Text("将把 \(model.pendingDeletion.count) 项（共 \(model.pendingDeletionSizeText)）移到废纸篓，之后可从废纸篓恢复。")
+                Text(deleteConfirmMessage)
             }
     }
 
@@ -67,6 +67,14 @@ struct ResultsView: View {
                 if !newValue { model.cancelPendingDeletion() }
             }
         )
+    }
+
+    private var deleteConfirmMessage: String {
+        var text = "将把 \(model.pendingDeletion.count) 项（共 \(model.pendingDeletionSizeText)）移到废纸篓，之后可从废纸篓恢复。"
+        if model.cleanPbxprojOnDelete, !model.isMockMode {
+            text += " 同时会清理 project.pbxproj 中的对应引用（先备份为 .lumber-bak）。"
+        }
+        return text
     }
 
     /// 空格/回车：为当前选中项打开独立预览窗口（同一资源重复触发只会聚焦已有窗口）
@@ -87,8 +95,8 @@ struct ResultsView: View {
                 // 不要用 GlassEffectContainer 包住懒加载列表：滚动时行不断创建/销毁，
                 // 容器会在每次布局变化时重建整块玻璃合成层，表现为 cell 闪一下。
                 LazyVStack(spacing: 10) {
-                    ForEach(list) { item in
-                        ResultCard(item: item)
+                    ForEach(Array(list.enumerated()), id: \.element.id) { index, item in
+                        ResultCard(item: item, rowIndex: index)
                             .id(item.id)
                     }
                     if list.isEmpty {
@@ -101,8 +109,9 @@ struct ResultsView: View {
             }
             // 硬边裁切：列表贴到导航栏时不产生模糊透出
             .scrollEdgeEffectStyle(.hard, for: .top)
-            .onChange(of: model.activeSelectionID) { _, id in
-                guard let id else { return }
+            // 仅方向键切换时滚动；删除/忽略/点击改选中不要动滚动位置
+            .onChange(of: model.selectionScrollRequest) { _, _ in
+                guard let id = model.activeSelectionID else { return }
                 withAnimation(.easeOut(duration: 0.15)) {
                     proxy.scrollTo(id, anchor: .center)
                 }
@@ -139,7 +148,7 @@ struct ResultsView: View {
                 Button("清除筛选与搜索") {
                     model.searchText = ""
                     model.filter = nil
-                    model.reviewOnly = false
+                    model.statusFilter = .all
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -226,9 +235,9 @@ struct ResultsNavControls: View {
         .help("搜索资源名或相对路径（⌘F）")
     }
 
-    // MARK: 筛选 + 排序 + 待确认开关
+    // MARK: 筛选 + 排序 + 状态筛选
 
-    /// 下拉里每个分组带数量（待确认开关生效后也相应变化，搜索词不影响分组数量）
+    /// 下拉里每个类型分组带数量（状态筛选生效后也相应变化，搜索词不影响分组数量）
     private func groupLabel(for type: ResourceType?) -> String {
         if let type {
             return "\(type.rawValue) \(model.scopedTypeCounts[type, default: 0])"
@@ -236,9 +245,20 @@ struct ResultsNavControls: View {
         return "全部 \(model.scopedItems.count)"
     }
 
+    private func statusLabel(for filter: StatusFilter) -> String {
+        "\(filter.rawValue)（\(model.statusFilterCount(for: filter))）"
+    }
+
+    /// 菜单胶囊文案：类型 + 非「全部」时的状态
+    private var filterMenuTitle: String {
+        let typePart = groupLabel(for: model.filter)
+        guard model.statusFilter != .all else { return typePart }
+        return "\(typePart) · \(model.statusFilter.rawValue)"
+    }
+
     private var filterMenu: some View {
         Menu {
-            Picker("筛选", selection: Binding(get: { model.filter }, set: { model.filter = $0 })) {
+            Picker("类型", selection: Binding(get: { model.filter }, set: { model.filter = $0 })) {
                 Text(groupLabel(for: nil)).tag(Optional<ResourceType>.none)
                 ForEach(ResourceType.allCases, id: \.self) { type in
                     Text(groupLabel(for: type)).tag(Optional(type))
@@ -249,10 +269,16 @@ struct ResultsNavControls: View {
 
             Divider()
 
-            Toggle("只看待确认（\(model.needsReviewCount)）", isOn: Binding(
-                get: { model.reviewOnly },
-                set: { model.reviewOnly = $0 }
-            ))
+            Picker("状态", selection: Binding(
+                get: { model.statusFilter },
+                set: { model.statusFilter = $0 }
+            )) {
+                ForEach(StatusFilter.allCases) { filter in
+                    Text(statusLabel(for: filter)).tag(filter)
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
 
             Divider()
 
@@ -270,7 +296,7 @@ struct ResultsNavControls: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Text(groupLabel(for: model.filter))
+                Text(filterMenuTitle)
                     .font(.system(size: 11, weight: .medium))
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .semibold))
@@ -284,27 +310,13 @@ struct ResultsNavControls: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("按类型筛选 / 排序 / 只看待确认")
+        .help("按类型 / 判定状态筛选，或排序")
     }
 
     // MARK: 批量操作
 
     private var actionsMenu: some View {
         Menu {
-            Button("忽略当前筛选结果（\(model.filteredItems.count)）") { model.ignoreAll() }
-                .disabled(model.filteredItems.isEmpty)
-            Button("移到废纸篓（选中 \(model.selectedIDs.count)）") { model.requestDeleteSelected() }
-                .disabled(model.selectedIDs.isEmpty || model.isDeleting)
-            Button("删除当前筛选结果（\(model.filteredItems.count)）…") { model.requestDeleteAllVisible() }
-                .disabled(model.filteredItems.isEmpty || model.isDeleting)
-
-            Button("全选当前结果") { model.selectAllFiltered() }
-                .disabled(model.filteredItems.isEmpty)
-            Button("取消选择") { model.clearSelection() }
-                .disabled(model.selectedIDs.isEmpty)
-
-            Divider()
-
             Button("导出当前结果（\(model.filteredItems.count)）…") { model.exportVisibleReport() }
                 .disabled(model.filteredItems.isEmpty)
             if !model.unavailableIDs.isEmpty {
@@ -315,12 +327,32 @@ struct ResultsNavControls: View {
 
             Divider()
 
+            Button("忽略当前结果（\(model.filteredItems.count)）") {
+                model.ignoreAll()
+            }
+            .disabled(model.filteredItems.isEmpty)
+            Button(
+                "删除高置信度未引用（\(model.filteredItems.filter(\.isConfirmedUnused).count)）…",
+                role: .destructive
+            ) {
+                model.requestDeleteConfirmedUnused()
+            }
+            .disabled(model.filteredItems.filter(\.isConfirmedUnused).isEmpty || model.isDeleting)
+            Button("删除当前结果（\(model.filteredItems.count)）…", role: .destructive) {
+                model.requestDeleteAllVisible()
+            }
+            .disabled(model.filteredItems.isEmpty || model.isDeleting)
+
+            Divider()
+
             Button("选择其他工程…") { model.chooseProject() }
-            Button("返回首页") { model.backToHome() }
 
             if !model.sessionIgnored.isEmpty {
                 Divider()
                 Button("查看已忽略（\(model.sessionIgnored.count)）…") { showIgnoredSheet = true }
+                Button("已忽略全部升格为永久规则") {
+                    model.promoteAllIgnoredToRules()
+                }
             }
         } label: {
             Image(systemName: "ellipsis")

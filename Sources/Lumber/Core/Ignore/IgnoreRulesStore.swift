@@ -2,8 +2,8 @@ import Foundation
 
 // MARK: - 忽略规则持久化
 //
-// 用户规则写入 ~/Library/Application Support/Lumber/ignore_rules（每行一条，允许 # 注释），
-// 扫描历史仍然只存在于内存，不落盘。
+// 用户规则写入 ~/Library/Application Support/Lumber/ignore_rules（每行一条，允许 # 注释）。
+// 扫描选项与最近工程见 PreferencesStore。
 
 enum IgnoreRulesStore {
     static var directoryURL: URL {

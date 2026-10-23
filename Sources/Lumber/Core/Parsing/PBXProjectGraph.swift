@@ -231,7 +231,8 @@ extension PBXProjectGraph {
 // 沿 PBXGroup 父链把相对路径拼成绝对路径。
 // 父链通过「所有对象的 children 数组」反推得到。
 
-private struct PathResolver {
+/// 沿 PBXGroup 父链解析绝对路径；清理 pbxproj 引用时也会复用。
+struct PathResolver {
     let objects: [String: PBXValue]
     let rootDirectory: URL
     private let parentOf: [String: String]

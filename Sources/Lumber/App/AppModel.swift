@@ -18,20 +18,30 @@ final class AppModel {
     var previewItemID: UUID?
     var filter: ResourceType?
     var searchText: String = ""
-    /// 只看「待确认」条目
-    var reviewOnly = false
+    /// 按判定状态筛选（高置信度 / 待确认 / 未加入 target）
+    var statusFilter: StatusFilter = .all
     /// 结果列表排序方式（本次运行有效）
     var sortOption: SortOption = .standard
     /// 当前键盘焦点所在条目（用于方向键滚动到可视区）
     var activeSelectionID: UUID?
     /// 搜索框提交后请求把焦点还给列表
     var listFocusRequest = 0
+    /// 方向键切换选中后请求把条目滚进可视区（删除/点击等不要触发）
+    var selectionScrollRequest = 0
     /// ⌘F / 菜单请求把焦点交给搜索框
     var searchFocusRequest = 0
     var rules: [IgnoreRule] = IgnoreRule.builtIn
-    /// 扫描选项（设置页可调，仅本次运行有效，不持久化）
-    var includeCodeFiles = true
-    var scanDepth = 24
+    /// 扫描选项（设置页可调，持久化到 Application Support）
+    var includeCodeFiles = true {
+        didSet { persistPreferencesIfNeeded(oldValue: oldValue, newValue: includeCodeFiles) }
+    }
+    var scanDepth = 24 {
+        didSet { persistPreferencesIfNeeded(oldValue: oldValue, newValue: scanDepth) }
+    }
+    /// 移到废纸篓后同步清理 project.pbxproj 引用
+    var cleanPbxprojOnDelete = true {
+        didSet { persistPreferencesIfNeeded(oldValue: oldValue, newValue: cleanPbxprojOnDelete) }
+    }
     var toast: String?
     var dropError: String?
 
@@ -46,8 +56,12 @@ final class AppModel {
     var pendingDeletion: [ResourceItem] = []
     var showingDeleteConfirm = false
     var isDeleting = false
+    /// 首页「最近工程」
+    var recentProjects: [RecentProject] = []
     /// 是否使用内置演示数据（调试启动参数 --mock / --demo=xxx）
     private(set) var isMockMode = false
+    /// 避免 init 加载偏好时触发 didSet 再写盘
+    private var isLoadingPreferences = false
 
     var scanTask: Task<Void, Never>?
 
@@ -55,6 +69,8 @@ final class AppModel {
         let arguments = CommandLine.arguments
         isMockMode = arguments.contains("--mock") || arguments.contains { $0.hasPrefix("--demo=") }
         loadPersistedRules()
+        loadPersistedPreferences()
+        recentProjects = PreferencesStore.loadRecentProjects()
         applyLaunchDemoIfNeeded()
         applyLaunchOpenIfNeeded(arguments)
     }
@@ -63,6 +79,24 @@ final class AppModel {
     private func loadPersistedRules() {
         let userPatterns = IgnoreRulesStore.loadPatterns()
         rules = IgnoreRule.builtIn + userPatterns.map { IgnoreRule(pattern: $0) }
+    }
+
+    private func loadPersistedPreferences() {
+        isLoadingPreferences = true
+        let prefs = PreferencesStore.loadPreferences()
+        includeCodeFiles = prefs.includeCodeFiles
+        scanDepth = prefs.scanDepth
+        cleanPbxprojOnDelete = prefs.cleanPbxprojOnDelete
+        isLoadingPreferences = false
+    }
+
+    private func persistPreferencesIfNeeded<T: Equatable>(oldValue: T, newValue: T) {
+        guard !isLoadingPreferences, oldValue != newValue else { return }
+        PreferencesStore.savePreferences(AppPreferences(
+            includeCodeFiles: includeCodeFiles,
+            scanDepth: scanDepth,
+            cleanPbxprojOnDelete: cleanPbxprojOnDelete
+        ))
     }
 
     /// 供扫描引擎使用的编译后规则集
@@ -79,6 +113,24 @@ final class AppModel {
     func persistUserRules() {
         let patterns = rules.filter { !$0.isBuiltIn }.map(\.pattern)
         IgnoreRulesStore.save(patterns)
+    }
+
+    func openRecentProject(_ recent: RecentProject) {
+        guard recent.exists else {
+            recentProjects = PreferencesStore.removeRecentProject(path: recent.path)
+            showToast("「\(recent.displayName)」已不存在，已从最近列表移除")
+            return
+        }
+        openProject(at: recent.url)
+    }
+
+    func removeRecentProject(_ recent: RecentProject) {
+        recentProjects = PreferencesStore.removeRecentProject(path: recent.path)
+    }
+
+    func clearRecentProjects() {
+        PreferencesStore.clearRecentProjects()
+        recentProjects = []
     }
 
     /// 验收便利：`--open <工程路径>` 启动后直接扫描该工程
@@ -135,9 +187,9 @@ final class AppModel {
         return items.filter { !ignoredIDs.contains($0.id) }
     }
 
-    /// 分组下拉各分组的数量（待确认开关生效后也相应变化，搜索词不影响）
+    /// 分组下拉各分组的数量（状态筛选生效后也相应变化，搜索词不影响）
     var scopedItems: [ResourceItem] {
-        reviewOnly ? visibleItems.filter(\.needsReview) : visibleItems
+        statusFilter == .all ? visibleItems : visibleItems.filter(statusFilter.matches)
     }
 
     /// 当前分组（待确认开关 + 搜索后）里各类型的数量
@@ -196,6 +248,19 @@ final class AppModel {
     /// 待确认条目数（当前可见）
     var needsReviewCount: Int { visibleItems.filter(\.needsReview).count }
 
+    /// 未加入 target 条目数（当前可见）
+    var notInTargetCount: Int { visibleItems.filter(\.notInTarget).count }
+
+    /// 状态筛选菜单里各档的数量
+    func statusFilterCount(for filter: StatusFilter) -> Int {
+        switch filter {
+        case .all: return visibleItems.count
+        case .confirmed: return confirmedUnusedCount
+        case .needsReview: return needsReviewCount
+        case .notInTarget: return notInTargetCount
+        }
+    }
+
     /// 导航栏顶部文案
     var topHintText: String {
         switch (page, phase) {
@@ -208,7 +273,7 @@ final class AppModel {
         case (.rules, _):
             return "忽略规则 · .gitignore 语法"
         case (.settings, _):
-            return "设置 · 规则已持久化"
+            return "设置 · 选项与规则已持久化"
         case (.about, _):
             return "关于 Lumber · 本地解析 · 零依赖"
         }
@@ -299,7 +364,7 @@ final class AppModel {
         previewItemID = nil
         searchText = ""
         filter = nil
-        reviewOnly = false
+        statusFilter = .all
         unavailableIDs = []
         pendingDeletion = []
         showingDeleteConfirm = false

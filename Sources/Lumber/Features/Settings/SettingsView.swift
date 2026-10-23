@@ -3,7 +3,7 @@ import SwiftUI
 
 // MARK: - 设置页
 //
-// 扫描选项只在本次运行有效；忽略规则会持久化到 Application Support 下的文件。
+// 扫描选项与「删除时清理 pbxproj」会持久化；忽略规则仍单独落盘。
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
@@ -36,6 +36,15 @@ struct SettingsView: View {
                                 .font(.system(size: 12, design: .monospaced))
                         }
                     }
+                    Divider()
+                    Toggle("删除时同步清理 project.pbxproj 引用", isOn: Binding(
+                        get: { model.cleanPbxprojOnDelete },
+                        set: { model.cleanPbxprojOnDelete = $0 }
+                    ))
+                    Text("移到废纸篓后，去掉工程里对应的 PBXFileReference / PBXBuildFile，避免 Xcode 里出现红字孤儿引用。写回前会备份为 project.pbxproj.lumber-bak。Assets 内的 imageset 通常无独立引用，会自动跳过。")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 settingsCard {
@@ -65,7 +74,7 @@ struct SettingsView: View {
                     }
                 }
 
-                Text("扫描选项仅本次运行有效，重启后恢复默认；忽略规则会持久化。所有删除都走系统废纸篓，可从废纸篓恢复。")
+                Text("扫描选项会记住；忽略规则单独持久化。所有删除都走系统废纸篓，可从废纸篓恢复。")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)

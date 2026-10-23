@@ -61,6 +61,22 @@ extension AppModel {
         let target = list[next]
         selectedIDs = [target.id]
         activeSelectionID = target.id
+        selectionScrollRequest += 1
+    }
+
+    /// 在真正移除条目之前调用：焦点落在邻近项（优先下一项），避免跳到列表顶部。
+    func nextActiveSelectionID(removing removed: Set<UUID>) -> UUID? {
+        let list = filteredItems
+        guard let currentID = activeSelectionID, removed.contains(currentID) else {
+            return activeSelectionID
+        }
+        guard let index = list.firstIndex(where: { $0.id == currentID }) else {
+            return list.first(where: { !removed.contains($0.id) })?.id
+        }
+        if let next = list[(index + 1)...].first(where: { !removed.contains($0.id) }) {
+            return next.id
+        }
+        return list[..<index].last(where: { !removed.contains($0.id) })?.id
     }
 
     /// 供主窗口回车/空格打开预览窗口时取「要预览的条目」

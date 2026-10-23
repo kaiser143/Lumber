@@ -5,12 +5,23 @@ import UniformTypeIdentifiers
 //
 // 拖入真实 .xcodeproj / 工程目录即可扫描；
 // 非法文件不弹窗，在拖放区显示红色边框 + 文案，几秒后自动恢复。
+// 下方展示最近打开的工程，避免反复拖放。
 
 struct HomeView: View {
     @Environment(AppModel.self) private var model
     @State private var hovering = false
 
     var body: some View {
+        VStack(spacing: 0) {
+            dropZone
+            if !model.recentProjects.isEmpty {
+                recentSection
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var dropZone: some View {
         VStack(spacing: 10) {
             Spacer()
 
@@ -49,13 +60,67 @@ struct HomeView: View {
                 .allowsHitTesting(false)
         }
         .onDrop(of: [.fileURL], isTargeted: $hovering) { providers in
-            // onDrop 必须同步返回，真正的文件读取放到异步任务里
             Task { await model.acceptDrop(providers: providers) }
             return true
         }
         .onTapGesture { model.chooseProject() }
         .animation(.easeOut(duration: 0.15), value: hovering)
         .animation(.easeOut(duration: 0.15), value: model.dropError)
+    }
+
+    private var recentSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("最近工程")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("清除") { model.clearRecentProjects() }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 4)
+
+            ForEach(model.recentProjects.prefix(5)) { recent in
+                Button {
+                    model.openRecentProject(recent)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "chevron.left.forwardslash.chevron.right")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Color.lumberAccent)
+                            .frame(width: 22, height: 22)
+                            .background(Color.lumberAccent.opacity(0.12), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(recent.displayName)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            Text(((recent.path as NSString).deletingLastPathComponent as NSString).abbreviatingWithTildeInPath)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Spacer(minLength: 8)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .contextMenu {
+                    Button("从列表移除") { model.removeRecentProject(recent) }
+                }
+            }
+        }
+        .padding(.horizontal, 28)
+        .padding(.bottom, 24)
+        .frame(maxWidth: 520)
+        .frame(maxWidth: .infinity)
     }
 
     private var borderColor: Color {

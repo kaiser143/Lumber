@@ -300,16 +300,34 @@ struct PreviewView: View {
     // MARK: - 右上角浮动操作（标题栏隐藏后，忽略/删除浮在图片上）
 
     private var windowActions: some View {
-        HStack(spacing: 6) {
-            FloatingCircleButton(icon: "eye.slash", help: "忽略此资源", disabled: isStale) {
+        HStack(spacing: 2) {
+            FloatingCircleButton(
+                icon: "eye.slash",
+                tint: Color.primary.opacity(0.72),
+                help: "忽略此资源",
+                disabled: isStale
+            ) {
                 model.ignore(currentItem)
                 dismiss()
             }
-            FloatingCircleButton(icon: "trash", help: "移到废纸篓（可从废纸篓恢复）", isDestructive: true, disabled: isStale) {
+            FloatingCircleButton(
+                icon: "trash",
+                tint: .red,
+                help: "移到废纸篓（可从废纸篓恢复）",
+                disabled: isStale
+            ) {
                 model.requestDelete([currentItem])
                 dismiss()
             }
         }
+        .padding(.horizontal, 2)
+        .padding(.vertical, 1)
+        // 与结果列表 cell / 导航栏控件板同款胶囊底
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+                .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+        )
     }
 
     // MARK: - 主体
@@ -410,7 +428,7 @@ struct PreviewView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// 左下角：尺寸 + 文件大小（对齐参考图左下角卡片）
+    /// 左下角：尺寸 + 文件大小 + 判定原因（对齐参考图左下角卡片）
     private var sizeCard: some View {
         VStack(alignment: .leading, spacing: 2) {
             if let size = previewImage?.size {
@@ -420,10 +438,10 @@ struct PreviewView: View {
             Text(currentItem.sizeText)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
-            if currentItem.needsReview, let note = currentItem.note {
-                Text("待确认 · \(note)")
+            if let reason = currentItem.judgmentReasonText {
+                Text("\(currentItem.statusText) · \(reason)")
                     .font(.system(size: 10))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(previewJudgmentColor)
                     .lineLimit(2)
                     .frame(maxWidth: 240, alignment: .leading)
             }
@@ -433,6 +451,13 @@ struct PreviewView: View {
         .glassPanel(cornerRadius: 12)
         .padding(.leading, Self.sideInset)
         .padding(.bottom, Self.sideInset)
+    }
+
+    private var previewJudgmentColor: Color {
+        if currentItem.notInTarget { return .blue.opacity(0.9) }
+        if currentItem.needsReview { return .orange }
+        if currentItem.isConfirmedUnused { return .green.opacity(0.9) }
+        return .secondary
     }
 
     /// 底部中央：缩放与旋转
@@ -514,9 +539,11 @@ struct PreviewView: View {
                 infoRow("大小", currentItem.sizeText)
                 GlassDivider()
                 infoRow("类型", currentItem.type.rawValue)
-                if let note = currentItem.note {
+                GlassDivider()
+                infoRow("状态", currentItem.statusText)
+                if let reason = currentItem.judgmentReasonText {
                     GlassDivider()
-                    infoRow("判定", note)
+                    infoRow("判定", reason)
                 }
                 if let modified = modificationText {
                     GlassDivider()
@@ -565,49 +592,36 @@ struct PreviewView: View {
     }
 }
 
-// MARK: - 预览窗顶部浮动圆钮（悬停高亮）
+// MARK: - 预览窗顶部浮动按钮（胶囊内线框图标 + 悬停小圆）
 
 private struct FloatingCircleButton: View {
     let icon: String
+    let tint: Color
     let help: String
-    var isDestructive: Bool = false
     var disabled: Bool = false
     let action: () -> Void
 
     @State private var isHovering = false
 
-    private var hoverTint: Color {
-        isDestructive ? Color.red.opacity(0.18) : Color.primary.opacity(0.12)
-    }
-
     var body: some View {
         Button(action: action) {
-            Color.clear
-                .frame(width: 24, height: 24)
-                .glassPanel(in: Circle(), interactive: true)
-                .overlay {
-                    Circle().fill(isHovering && !disabled ? hoverTint : Color.clear)
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(tint)
+                .frame(width: 26, height: 26)
+                .background {
+                    Circle()
+                        .fill(Color.lumberAccent.opacity(isHovering && !disabled ? 0.28 : 0))
+                        .frame(width: 24, height: 24)
                 }
-                .overlay {
-                    Circle().strokeBorder(
-                        Color.primary.opacity(isHovering && !disabled ? 0.20 : 0),
-                        lineWidth: 0.5
-                    )
-                }
-                .overlay {
-                    Image(systemName: icon)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color.primary.opacity(disabled ? 0.32 : (isHovering ? 1 : 0.85)))
-                }
-                .scaleEffect(isHovering && !disabled ? 1.06 : 1)
-                .contentShape(Circle())
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.12)) { isHovering = hovering }
-        }
         .help(help)
+        .accessibilityLabel(help)
         .disabled(disabled)
+        .opacity(disabled ? 0.4 : 1)
+        .onHover { isHovering = $0 }
     }
 }
 

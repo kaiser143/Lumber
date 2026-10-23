@@ -88,7 +88,7 @@ struct AboutView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
 
-            Text("扫描工程里没有被引用的图片、XIB / Storyboard 与代码文件，预览确认后一键移入废纸篓。解析与判定全部在本机完成，不上传代码，也不修改工程文件。")
+            Text("扫描工程里没有被引用的图片、XIB / Storyboard 与代码文件，预览确认后移入废纸篓（可恢复）。解析与判定全部在本机完成，不上传代码。删除时可选同步清理 project.pbxproj 引用（写回前备份为 .lumber-bak），默认在设置中开启。")
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)

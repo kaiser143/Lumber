@@ -132,7 +132,7 @@ struct SidebarView: View {
     }
 }
 
-// MARK: - 菜单显隐按钮（悬停时圆形高亮）
+// MARK: - 菜单显隐按钮（与 cell / 预览操作同款胶囊底）
 
 struct SidebarToggleButton: View {
     let icon: String
@@ -144,16 +144,24 @@ struct SidebarToggleButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 15, weight: .regular))
+                .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(hovering ? Color.primary : Color.secondary)
-                .frame(width: 28, height: 28)
-                .background(
+                .frame(width: 26, height: 26)
+                .background {
                     Circle()
-                        .fill(hovering ? Color.primary.opacity(0.10) : Color.clear)
-                )
-                .contentShape(Circle())
+                        .fill(Color.lumberAccent.opacity(hovering ? 0.28 : 0))
+                        .frame(width: 24, height: 24)
+                }
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .padding(.horizontal, 2)
+        .padding(.vertical, 1)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+                .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+        )
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
         .help(tip)

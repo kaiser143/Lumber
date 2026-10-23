@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - 「已忽略」清单
 //
-// 会话级忽略只在本次扫描内生效（不持久化），这里可以逐条或一次性恢复。
+// 会话级忽略只在本次扫描内生效；可在此升格为永久规则或恢复。
 
 struct IgnoredItemsSheet: View {
     @Environment(AppModel.self) private var model
@@ -24,7 +24,7 @@ struct IgnoredItemsSheet: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("本次扫描已忽略（\(model.sessionIgnored.count)）")
                     .font(.system(size: 14, weight: .bold))
-                Text("忽略只在本次扫描内生效，不写入规则文件；重新扫描后这些条目会重新出现。")
+                Text("默认只藏这一轮；可升格为永久规则，重新扫描后也不再出现。")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -77,6 +77,10 @@ struct IgnoredItemsSheet: View {
             Text(item.sizeText)
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(.secondary)
+            Button("永久") { model.promoteIgnoredToRules([item]) }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .help("写入忽略规则，重扫后不再出现")
             Button("恢复") { model.restore(item) }
                 .buttonStyle(.bordered)
                 .controlSize(.mini)
@@ -88,13 +92,13 @@ struct IgnoredItemsSheet: View {
 
     private var footer: some View {
         HStack {
-            Text("想永久排除？到「忽略规则」里添加通配规则。")
-                .font(.system(size: 10.5))
-                .foregroundStyle(.tertiary)
+            Button("全部升格为永久规则") {
+                model.promoteAllIgnoredToRules()
+            }
+            .disabled(model.sessionIgnored.isEmpty)
             Spacer()
             Button("完成") { dismiss() }
                 .keyboardShortcut(.defaultAction)
         }
     }
 }
-

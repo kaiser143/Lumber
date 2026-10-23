@@ -4,24 +4,67 @@ import Foundation
 
 extension AppModel {
     func ignore(_ item: ResourceItem) {
-        guard !sessionIgnored.contains(where: { $0.id == item.id }) else { return }
-        sessionIgnored.append(item)
-        selectedIDs.remove(item.id)
-        if activeSelectionID == item.id { activeSelectionID = filteredItems.first?.id }
-        if previewItemID == item.id { previewItemID = nil }
-        showToast("已忽略 \(item.name)")
+        ignore([item])
+    }
+
+    /// 忽略若干条目（右键单条或多选）；已忽略的会跳过
+    func ignore(_ targets: [ResourceItem]) {
+        let fresh = targets.filter { item in
+            !sessionIgnored.contains(where: { $0.id == item.id })
+        }
+        guard !fresh.isEmpty else { return }
+        let ids = Set(fresh.map(\.id))
+        let nextSelection = nextActiveSelectionID(removing: ids)
+        sessionIgnored.append(contentsOf: fresh)
+        selectedIDs.subtract(ids)
+        if let id = activeSelectionID, ids.contains(id) { activeSelectionID = nextSelection }
+        if let id = previewItemID, ids.contains(id) { previewItemID = nil }
+        if fresh.count == 1 {
+            showToast("已忽略 \(fresh[0].name)")
+        } else {
+            showToast("已忽略 \(fresh.count) 项（本次扫描内生效）")
+        }
     }
 
     /// 忽略「当前筛选 + 搜索」下的全部条目（而不是所有可见条目，避免误伤被筛掉的项）
     func ignoreAll() {
-        let targets = filteredItems
+        ignore(filteredItems)
+    }
+
+    /// 写入永久忽略规则，并从本轮结果 / 会话忽略里拿掉（重扫时由规则过滤）
+    func promoteIgnoredToRules(_ targets: [ResourceItem]) {
         guard !targets.isEmpty else { return }
+        let patterns = targets.compactMap { Self.ignorePattern(for: $0) }
+        guard !patterns.isEmpty else { return }
+        let added = importRules(patterns)
         let ids = Set(targets.map(\.id))
-        sessionIgnored.append(contentsOf: targets)
+        let nextSelection = nextActiveSelectionID(removing: ids)
+        items.removeAll { ids.contains($0.id) }
+        sessionIgnored.removeAll { ids.contains($0.id) }
         selectedIDs.subtract(ids)
-        activeSelectionID = nil
-        previewItemID = nil
-        showToast("已忽略当前筛选下的 \(targets.count) 项（本次扫描内生效）")
+        if let id = activeSelectionID, ids.contains(id) { activeSelectionID = nextSelection }
+        if let id = previewItemID, ids.contains(id) { previewItemID = nil }
+        if added > 0 {
+            showToast(added == 1
+                ? "已写入永久规则，重扫后不再出现"
+                : "已写入 \(added) 条永久规则，重扫后不再出现")
+        } else {
+            showToast("对应规则已存在，已从本轮结果移除")
+        }
+    }
+
+    func promoteAllIgnoredToRules() {
+        promoteIgnoredToRules(sessionIgnored)
+    }
+
+    /// 生成可写入 ignore_rules 的相对路径模式
+    static func ignorePattern(for item: ResourceItem) -> String? {
+        let path = item.relativePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !path.isEmpty else { return nil }
+        if item.directoryPath != nil {
+            return path.hasSuffix("/") ? path : path + "/"
+        }
+        return path
     }
 
     // MARK: - 删除
@@ -47,6 +90,11 @@ extension AppModel {
         requestDelete(filteredItems)
     }
 
+    /// 删除当前筛选结果里的高置信度未引用项
+    func requestDeleteConfirmedUnused() {
+        requestDelete(filteredItems.filter(\.isConfirmedUnused))
+    }
+
     func confirmPendingDeletion() {
         let items = pendingDeletion
         pendingDeletion = []
@@ -59,25 +107,48 @@ extension AppModel {
         showingDeleteConfirm = false
     }
 
-    /// 真实删除：全部经 TrashService 走系统废纸篓（可恢复）
+    /// 真实删除：全部经 TrashService 走系统废纸篓（可恢复）；可选同步清理 pbxproj
     func trash(_ targets: [ResourceItem]) {
         guard !targets.isEmpty else { return }
         isDeleting = true
+        let shouldCleanPbx = cleanPbxprojOnDelete && !isMockMode
+        let xcodeprojURL = project?.xcodeprojURL
         Task { @MainActor in
             let outcome = await TrashService.recycle(targets)
+            var pbxCleaned = 0
+            var pbxError: String?
+            if shouldCleanPbx, let xcodeprojURL, !outcome.trashedIDs.isEmpty {
+                let trashedItems = targets.filter { outcome.trashedIDs.contains($0.id) }
+                let paths = trashedItems.map { $0.directoryPath ?? $0.absolutePath }
+                do {
+                    let clean = try PBXProjCleaner.removeReferences(
+                        xcodeprojURL: xcodeprojURL,
+                        absolutePaths: paths
+                    )
+                    pbxCleaned = clean.removedObjectCount
+                } catch {
+                    pbxError = error.localizedDescription
+                }
+            }
             self.isDeleting = false
-            self.applyTrashOutcome(outcome)
+            self.applyTrashOutcome(outcome, pbxCleanedObjects: pbxCleaned, pbxError: pbxError)
         }
     }
 
-    private func applyTrashOutcome(_ outcome: TrashOutcome) {
+    private func applyTrashOutcome(
+        _ outcome: TrashOutcome,
+        pbxCleanedObjects: Int = 0,
+        pbxError: String? = nil
+    ) {
         let removed = Set(outcome.removedIDs)
         if !removed.isEmpty {
+            // 先算邻近焦点，再改 items；否则 filteredItems 已变，只能落到第一条并触发整页滚动
+            let nextSelection = nextActiveSelectionID(removing: removed)
             items.removeAll { removed.contains($0.id) }
             sessionIgnored.removeAll { removed.contains($0.id) }
             selectedIDs.subtract(removed)
             if let id = activeSelectionID, removed.contains(id) {
-                activeSelectionID = filteredItems.first?.id
+                activeSelectionID = nextSelection
             }
             if let id = previewItemID, removed.contains(id) { previewItemID = nil }
         }
@@ -85,26 +156,35 @@ extension AppModel {
             unavailableIDs.insert(failure.item.id)
         }
 
+        var message: String
         if outcome.failures.isEmpty {
             guard !removed.isEmpty else { return }
-            showToast("已移到废纸篓 \(removed.count) 项，可从废纸篓恢复")
+            message = "已移到废纸篓 \(removed.count) 项，可从废纸篓恢复"
         } else if outcome.trashedIDs.isEmpty {
             showToast("删除失败：\(outcome.failures[0].reason)")
+            return
         } else {
-            showToast("已移到废纸篓 \(removed.count) 项，\(outcome.failures.count) 项失败并标记为不可用")
+            message = "已移到废纸篓 \(removed.count) 项，\(outcome.failures.count) 项失败并标记为不可用"
         }
+        if pbxCleanedObjects > 0 {
+            message += "；已清理 \(pbxCleanedObjects) 处工程引用"
+        } else if let pbxError {
+            message += "；工程引用未清理（\(pbxError)）"
+        }
+        showToast(message)
     }
 
     /// 把删除失败、目标已不存在的条目从列表里移除，避免一直占着「不可用」状态
     func removeUnavailableFromList() {
         let ids = unavailableIDs
         guard !ids.isEmpty else { return }
+        let nextSelection = nextActiveSelectionID(removing: ids)
         items.removeAll { ids.contains($0.id) }
         sessionIgnored.removeAll { ids.contains($0.id) }
         selectedIDs.subtract(ids)
         unavailableIDs = []
         if let id = activeSelectionID, ids.contains(id) {
-            activeSelectionID = filteredItems.first?.id
+            activeSelectionID = nextSelection
         }
         showToast("已从列表移除 \(ids.count) 个不可用项")
     }

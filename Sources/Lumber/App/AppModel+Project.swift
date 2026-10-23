@@ -69,6 +69,7 @@ extension AppModel {
         resetScanState()
         project = nil
         projectName = xcodeprojURL.lastPathComponent
+        recentProjects = PreferencesStore.recordRecentProject(xcodeprojURL: xcodeprojURL)
         phase = .scanning
         progress = ScanProgress(fraction: 0.01, phaseText: "解析工程", currentPath: "读取 project.pbxproj…")
 

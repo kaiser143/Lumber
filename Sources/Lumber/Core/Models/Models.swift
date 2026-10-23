@@ -60,7 +60,7 @@ struct ResourceItem: Identifiable, Hashable, Codable {
     let needsReview: Bool
     /// 文件在工程导航器里，但没有加入任何 target 构建阶段
     let notInTarget: Bool
-    /// 判定说明，用于 tooltip 与预览页
+    /// 判定说明：结果行常驻展示，也用于 tooltip / 预览 / CSV
     let note: String?
     /// 需要整体处理的目录（如 Assets.xcassets 里的 .imageset）；单文件资源为 nil
     let directoryPath: String?
@@ -102,6 +102,21 @@ struct ResourceItem: Identifiable, Hashable, Codable {
         if needsReview { return "待确认" }
         if unreferenced { return "高置信度未引用" }
         return "已引用"
+    }
+
+    /// 列表 / 预览常驻展示的判定原因；有 note 用 note，否则按状态兜底
+    var judgmentReasonText: String? {
+        if let note, !note.isEmpty { return note }
+        if notInTarget {
+            return "在工程导航器中，但没有加入任何 target 构建阶段"
+        }
+        if needsReview {
+            return "存在模糊信号，建议人工确认后再删除"
+        }
+        if isConfirmedUnused {
+            return "工程文本与构建阶段中均未找到引用"
+        }
+        return nil
     }
 }
 

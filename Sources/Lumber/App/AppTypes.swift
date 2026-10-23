@@ -17,6 +17,27 @@ enum AppPage: Hashable {
     case about
 }
 
+// MARK: - 结果状态筛选
+
+/// 结果列表按判定状态收窄：高置信度 / 待确认 / 未加入 target
+enum StatusFilter: String, CaseIterable, Identifiable, Hashable {
+    case all = "全部状态"
+    case confirmed = "高置信度"
+    case needsReview = "待确认"
+    case notInTarget = "未加入 target"
+
+    var id: String { rawValue }
+
+    func matches(_ item: ResourceItem) -> Bool {
+        switch self {
+        case .all: return true
+        case .confirmed: return item.isConfirmedUnused
+        case .needsReview: return item.needsReview
+        case .notInTarget: return item.notInTarget
+        }
+    }
+}
+
 // MARK: - 结果排序
 
 enum SortOption: String, CaseIterable, Identifiable, Hashable {
