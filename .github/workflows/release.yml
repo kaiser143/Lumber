@@ -1,17 +1,26 @@
 name: Release
 
 on:
+  # 方式一：推送标签时自动打包发布（推荐）：v1.1.0 与 1.1.0 两种写法都能触发
   push:
     tags:
       - "v*"
+      - "*.*.*"
+  # 方式二：在 Actions 页面手动触发，填一个版本标签
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的版本标签，例如 v1.1.0（不存在时按当前提交创建）"
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
   release:
-    # Liquid Glass 需要 macOS 26 SDK；与 CI 保持一致。
-    runs-on: macos-latest
+    # Liquid Glass 需要 macOS 26 SDK；macos-latest 当前即 macOS 26，这里显式固定更稳。
+    runs-on: macos-26
 
     steps:
       - name: Checkout
@@ -23,12 +32,29 @@ jobs:
       - name: Resolve version from tag
         id: version
         run: |
-          TAG="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Build app bundle
+      # 让 app 内版本号与标签一致，避免 plist 与 tag 版本不一致
+      - name: Sync version into Info.plist
+        run: |
+          PLIST="Resources/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${{ steps.version.outputs.version }}" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" "$PLIST"
+
+      # package-app.sh 会同时产出 dist/Lumber.app 与 dist/Lumber-<版本>.dmg
+      - name: Build app and dmg
         run: ./package-app.sh dist/Lumber.app
+
+      - name: Verify signature
+        run: |
+          codesign -dv --verbose=2 dist/Lumber.app 2>&1
+          codesign --verify --deep --strict --verbose=2 dist/Lumber.app
 
       - name: Zip app
         run: |
@@ -41,7 +67,22 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           name: Lumber ${{ steps.version.outputs.version }}
           generate_release_notes: true
+          # 未做 Apple 公证，这里直接给出解除 Gatekeeper 拦截的办法
+          body: |
+            ## 安装
+
+            1. 下载 `Lumber-${{ steps.version.outputs.version }}.dmg`，打开镜像把 **Lumber** 拖进「应用程序」。
+            2. 本版本未做 Apple 公证（notarization），首次打开会被 Gatekeeper 拦截。在「终端」执行一次即可：
+
+            ```bash
+            xattr -dr com.apple.quarantine /Applications/Lumber.app
+            ```
+
+            3. 若仍提示无法打开，到「系统设置 › 隐私与安全性」底部点「仍要打开」。
+
+            系统要求：macOS 26.0+（Apple Silicon）。
           files: |
+            dist/Lumber-${{ steps.version.outputs.version }}.dmg
             dist/Lumber-${{ steps.version.outputs.version }}-macos.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
