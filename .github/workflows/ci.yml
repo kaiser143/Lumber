@@ -5,15 +5,27 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+# 本仓库的 Actions 策略只允许 kaiser143 名下的 action 且必须 pin 到完整 SHA，
+# 所以这里不使用任何第三方 action：checkout 用 runner 自带的 git 完成。
 jobs:
   build-and-test:
-    # Liquid Glass（glassEffect）要求 macOS 26 SDK；macos-latest 会跟随 GitHub 的最新镜像。
-    # 如果镜像尚未升级，请改成显式可用的版本（例如 macos-26）。
-    runs-on: macos-latest
+    # Liquid Glass（glassEffect）要求 macOS 26 SDK。
+    runs-on: macos-26
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          git init -q .
+          git config "http.https://github.com/.extraheader" \
+            "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 | tr -d '\n')"
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch -q --depth 1 --no-tags origin "${GITHUB_REF}"
+          git checkout -q FETCH_HEAD
 
       - name: Swift version
         run: swift --version

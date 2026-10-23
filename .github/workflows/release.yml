@@ -17,35 +17,62 @@ on:
 permissions:
   contents: write
 
+# 本仓库的 Actions 策略只允许 kaiser143 名下的 action 且必须 pin 到完整 SHA，
+# 因此这里不使用任何第三方 action：checkout 用 git，发布用 runner 自带的 gh。
 jobs:
   release:
     # Liquid Glass 需要 macOS 26 SDK；macos-latest 当前即 macOS 26，这里显式固定更稳。
     runs-on: macos-26
-
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
+      - name: Resolve version from tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          TAG="${INPUT_TAG:-}"
+          if [ -z "$TAG" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          case "$TAG" in
+            v[0-9]*|[0-9]*) ;;
+            *)
+              printf '版本标签格式不正确：%s（示例：v1.1.0）\n' "$TAG" >&2
+              exit 1
+              ;;
+          esac
+          {
+            printf 'TAG=%s\n' "$TAG"
+            printf 'VERSION=%s\n' "${TAG#v}"
+          } >> "$GITHUB_ENV"
+
       - name: Checkout
-        uses: actions/checkout@v4
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          git init -q .
+          git config "http.https://github.com/.extraheader" \
+            "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 | tr -d '\n')"
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          REF="${GITHUB_REF}"
+          # 手动触发时，如果同名标签已存在，就按标签内容打包，保证产物与版本一致
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] \
+            && git ls-remote --exit-code --tags origin "refs/tags/${TAG}" > /dev/null 2>&1; then
+            REF="refs/tags/${TAG}"
+          fi
+          git fetch -q --depth 1 --no-tags origin "$REF"
+          git checkout -q FETCH_HEAD
 
       - name: Swift version
         run: swift --version
-
-      - name: Resolve version from tag
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.tag }}"
-          else
-            TAG="${GITHUB_REF_NAME}"
-          fi
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       # 让 app 内版本号与标签一致，避免 plist 与 tag 版本不一致
       - name: Sync version into Info.plist
         run: |
           PLIST="Resources/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${{ steps.version.outputs.version }}" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${GITHUB_RUN_NUMBER}" "$PLIST"
 
       # package-app.sh 会同时产出 dist/Lumber.app 与 dist/Lumber-<版本>.dmg
       - name: Build app and dmg
@@ -58,31 +85,39 @@ jobs:
 
       - name: Zip app
         run: |
-          ditto -c -k --keepParent dist/Lumber.app \
-            "dist/Lumber-${{ steps.version.outputs.version }}-macos.zip"
+          ditto -c -k --keepParent dist/Lumber.app "dist/Lumber-${VERSION}-macos.zip"
+
+      - name: Prepare release notes
+        run: |
+          {
+            printf '## 安装\n\n'
+            printf '1. 下载 `Lumber-%s.dmg`，打开镜像把 **Lumber** 拖进「应用程序」。\n' "$VERSION"
+            printf '2. 本版本未做 Apple 公证（notarization），首次打开会被 Gatekeeper 拦截，在「终端」执行一次即可：\n\n'
+            printf '   ```bash\n'
+            printf '   xattr -dr com.apple.quarantine /Applications/Lumber.app\n'
+            printf '   ```\n\n'
+            printf '3. 若仍提示无法打开，到「系统设置 › 隐私与安全性」底部点「仍要打开」。\n\n'
+            printf '系统要求：macOS 26.0+（Apple Silicon）。\n\n'
+            printf '%s\n\n' '---'
+          } > "${RUNNER_TEMP}/notes.md"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: Lumber ${{ steps.version.outputs.version }}
-          generate_release_notes: true
-          # 未做 Apple 公证，这里直接给出解除 Gatekeeper 拦截的办法
-          body: |
-            ## 安装
-
-            1. 下载 `Lumber-${{ steps.version.outputs.version }}.dmg`，打开镜像把 **Lumber** 拖进「应用程序」。
-            2. 本版本未做 Apple 公证（notarization），首次打开会被 Gatekeeper 拦截。在「终端」执行一次即可：
-
-            ```bash
-            xattr -dr com.apple.quarantine /Applications/Lumber.app
-            ```
-
-            3. 若仍提示无法打开，到「系统设置 › 隐私与安全性」底部点「仍要打开」。
-
-            系统要求：macOS 26.0+（Apple Silicon）。
-          files: |
-            dist/Lumber-${{ steps.version.outputs.version }}.dmg
-            dist/Lumber-${{ steps.version.outputs.version }}-macos.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DMG="dist/Lumber-${VERSION}.dmg"
+          ZIP="dist/Lumber-${VERSION}-macos.zip"
+          NOTES="${RUNNER_TEMP}/notes.md"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # 重跑同一个版本：覆盖资产与说明，不再新建 release
+            gh release upload "$TAG" "$DMG" "$ZIP" --clobber
+            gh release edit "$TAG" --title "Lumber ${VERSION}" --notes-file "$NOTES"
+          elif git ls-remote --exit-code --tags origin "refs/tags/${TAG}" > /dev/null 2>&1; then
+            gh release create "$TAG" "$DMG" "$ZIP" \
+              --title "Lumber ${VERSION}" \
+              --notes-file "$NOTES" \
+              --generate-notes
+          else
+            # 手动触发且标签尚不存在：由 gh 基于当前提交创建标签，无法生成对比变更
+            gh release create "$TAG" "$DMG" "$ZIP" \
+              --title "Lumber ${VERSION}" \
+              --notes-file "$NOTES"
+          fi
