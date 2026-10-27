@@ -7,14 +7,14 @@ import SwiftUI
 /// 这里兜底成 Resources/Info.plist 里的同一套版本号。
 enum LumberInfo {
     static var marketingVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.1.0"
     }
 
     static var buildVersion: String? {
         Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
     }
 
-    /// 「1.0」或「1.0 (1)」
+    /// 「1.1」或「1.1 (1)」
     static var versionText: String {
         guard let buildVersion else { return marketingVersion }
         return "\(marketingVersion) (\(buildVersion))"
