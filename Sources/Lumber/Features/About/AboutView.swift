@@ -6,8 +6,11 @@ import SwiftUI
 /// 裸二进制（`swift run`）没有 .app bundle，Info.plist 可能为空，
 /// 这里兜底成 Resources/Info.plist 里的同一套版本号。
 enum LumberInfo {
+    /// GitHub 仓库地址（导航栏右上角按钮、关于页共用）
+    static let repositoryURL = "https://github.com/kaiser143/Lumber"
+
     static var marketingVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.1.0"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.2.0"
     }
 
     static var buildVersion: String? {

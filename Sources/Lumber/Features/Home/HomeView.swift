@@ -10,6 +10,8 @@ import UniformTypeIdentifiers
 struct HomeView: View {
     @Environment(AppModel.self) private var model
     @State private var hovering = false
+    /// 鼠标是否停在点击热区内（悬停反馈 + 手型光标）
+    @State private var pointing = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,6 +27,38 @@ struct HomeView: View {
         VStack(spacing: 10) {
             Spacer()
 
+            // 只有图标 + 文案这一小块响应点击（参考图 1 的红框），整块画布仍可拖入
+            clickTarget
+
+            if let error = model.dropError {
+                Text(error)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 380)
+                    .transition(.opacity)
+            }
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(borderColor, lineWidth: 1.5)
+                .padding(8)
+                .allowsHitTesting(false)
+        }
+        .onDrop(of: [.fileURL], isTargeted: $hovering) { providers in
+            Task { await model.acceptDrop(providers: providers) }
+            return true
+        }
+        .animation(.easeOut(duration: 0.15), value: hovering)
+        .animation(.easeOut(duration: 0.15), value: model.dropError)
+    }
+
+    /// 点击热区：图标、标题与格式说明，外扩一圈留白但不超过图标宽度太多
+    private var clickTarget: some View {
+        VStack(spacing: 10) {
             LumberIcon()
                 .scaleEffect(92 / 256)
                 .frame(width: 92, height: 92)
@@ -39,33 +73,15 @@ struct HomeView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
                 .tracking(0.5)
-
-            if let error = model.dropError {
-                Text(error)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 380)
-                    .transition(.opacity)
-            }
-
-            Spacer()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .contentShape(Rectangle())
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(borderColor, lineWidth: 1.5)
-                .padding(8)
-                .allowsHitTesting(false)
-        }
-        .onDrop(of: [.fileURL], isTargeted: $hovering) { providers in
-            Task { await model.acceptDrop(providers: providers) }
-            return true
-        }
+        .padding(.horizontal, 32)
+        .padding(.vertical, 22)
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onTapGesture { model.chooseProject() }
-        .animation(.easeOut(duration: 0.15), value: hovering)
-        .animation(.easeOut(duration: 0.15), value: model.dropError)
+        .onHover { inside in
+            pointing = inside
+            if inside { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
+        }
     }
 
     private var recentSection: some View {

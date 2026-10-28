@@ -137,6 +137,8 @@ struct SidebarView: View {
 struct SidebarToggleButton: View {
     let icon: String
     let tip: String
+    /// 非空时图标固定用该色（如 GitHub 星标的金色），不再随次要色变化
+    var iconColor: Color? = nil
     let action: () -> Void
 
     @State private var hovering = false
@@ -145,11 +147,11 @@ struct SidebarToggleButton: View {
         Button(action: action) {
             Image(systemName: icon)
                 .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(hovering ? Color.primary : Color.secondary)
+                .foregroundStyle(foreground)
                 .frame(width: 26, height: 26)
                 .background {
                     Circle()
-                        .fill(Color.lumberAccent.opacity(hovering ? 0.28 : 0))
+                        .fill(hoverFill)
                         .frame(width: 24, height: 24)
                 }
                 .contentShape(Rectangle())
@@ -165,6 +167,18 @@ struct SidebarToggleButton: View {
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
         .help(tip)
+    }
+
+    private var foreground: Color {
+        if let iconColor { return iconColor }
+        return hovering ? Color.primary : Color.secondary
+    }
+
+    private var hoverFill: Color {
+        if let iconColor {
+            return iconColor.opacity(hovering ? 0.22 : 0)
+        }
+        return Color.lumberAccent.opacity(hovering ? 0.28 : 0)
     }
 }
 
@@ -273,7 +287,7 @@ struct DetailView: View {
     /// 与窗口红黄绿同高的导航栏高度
     private static let navBarHeight: CGFloat = 52
 
-    // MARK: - 导航栏（标题居中 + 结果页右侧控件）
+    // MARK: - 导航栏（标题居中 + 结果页右侧控件 + GitHub）
 
     private var navBar: some View {
         Group {
@@ -287,6 +301,7 @@ struct DetailView: View {
                         .truncationMode(.middle)
                     Spacer(minLength: 6)
                     ResultsNavControls()
+                    githubButton
                 }
             } else {
                 ZStack {
@@ -297,6 +312,7 @@ struct DetailView: View {
                     HStack(spacing: 0) {
                         expandButton
                         Spacer(minLength: 0)
+                        githubButton
                     }
                 }
             }
@@ -318,6 +334,22 @@ struct DetailView: View {
             .offset(y: -4)
             .padding(.leading, 62)
             .transition(.opacity)
+        }
+    }
+
+    /// 右上角：打开 GitHub 仓库（星标图标）
+    ///
+    /// 位置与扫描结果页保持一致：在导航栏内垂直居中。
+    private var githubButton: some View {
+        // 金色实心星，对标常见「已收藏 / Star」高亮态（约 #FFC107）
+        let starGold = Color(red: 1.0, green: 0.757, blue: 0.027)
+        return SidebarToggleButton(
+            icon: "star.fill",
+            tip: "在 GitHub 打开仓库",
+            iconColor: starGold
+        ) {
+            guard let url = URL(string: LumberInfo.repositoryURL) else { return }
+            NSWorkspace.shared.open(url)
         }
     }
 }
