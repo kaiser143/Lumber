@@ -10,10 +10,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/kaiser143/Lumber/actions/workflows/ci.yml"><img src="https://github.com/kaiser143/Lumber/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/platform-macOS%2026%2B-black" alt="macOS 26+">
-  <img src="https://img.shields.io/badge/Swift-6-orange" alt="Swift 6">
-  <img src="https://img.shields.io/badge/dependencies-none-brightgreen" alt="零依赖">
+  <img src="https://img.shields.io/github/v/release/kaiser143/Lumber?style=for-the-badge" alt="Release">
+  <a href="https://github.com/kaiser143/Lumber/actions/workflows/ci.yml"><img src="https://github.com/kaiser143/Lumber/actions/workflows/ci.yml/badge.svg?style=for-the-badge" alt="CI"></a>
+  <img src="https://img.shields.io/badge/platform-macOS%2026%2B-black?style=for-the-badge" alt="macOS 26+">
+  <img src="https://img.shields.io/badge/Swift-6-orange?style=for-the-badge" alt="Swift 6">
+  <img src="https://img.shields.io/badge/dependencies-none-brightgreen?style=for-the-badge" alt="零依赖">
 </p>
 
 <p align="center">
