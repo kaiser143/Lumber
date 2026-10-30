@@ -23,7 +23,11 @@ struct TrashOutcome {
 }
 
 enum TrashService {
-    static func recycle(_ items: [ResourceItem]) async -> TrashOutcome {
+    /// - Parameters:
+    ///   - items: 待回收条目
+    ///   - rootDirectory: 工程根目录。传入后所有目标必须落在其中，越界一律拒绝，
+    ///     防止软链接把删除引到工程外（例如 ~/Library、/System）。
+    static func recycle(_ items: [ResourceItem], rootDirectory: URL? = nil) async -> TrashOutcome {
         var outcome = TrashOutcome()
         var pending: [(item: ResourceItem, url: URL)] = []
         var seen: Set<String> = []
@@ -38,6 +42,14 @@ enum TrashService {
                 outcome.failures.append(TrashFailure(
                     item: item,
                     reason: "目标已不存在，可能被外部移动或删除"
+                ))
+                continue
+            }
+            // 路径围栏：先解析软链接再判断是否仍在工程内，越界直接判失败并标记不可用
+            if let rootDirectory, !Self.isContained(path, in: rootDirectory) {
+                outcome.failures.append(TrashFailure(
+                    item: item,
+                    reason: "目标位于工程目录之外，已拒绝删除"
                 ))
                 continue
             }
@@ -67,14 +79,32 @@ enum TrashService {
                     _ = try await NSWorkspace.shared.recycle([url])
                     outcome.trashedIDs.append(item.id)
                 } catch {
-                    outcome.failures.append(TrashFailure(
-                        item: item,
-                        reason: error.localizedDescription
-                    ))
+                    // 批量调用可能在抛出前已经回收掉一部分：这类按成功计，
+                    // 否则同一条目会被同时算进成功与失败，列表里的删除结果自相矛盾
+                    if FileManager.default.fileExists(atPath: url.path) {
+                        outcome.failures.append(TrashFailure(
+                            item: item,
+                            reason: error.localizedDescription
+                        ))
+                    } else {
+                        outcome.trashedIDs.append(item.id)
+                    }
                 }
             }
         }
 
         return outcome
+    }
+
+    // MARK: - 路径围栏
+
+    /// 双方都做「标准化 + 解析软链接」后再比较，避免 `/var` → `/private/var`、
+    /// 以及工程内软链接指向外部这两类绕过。
+    private static func isContained(_ path: String, in root: URL) -> Bool {
+        let target = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+        let base = root.standardizedFileURL.resolvingSymlinksInPath().path
+        guard !base.isEmpty else { return false }
+        let prefix = base.hasSuffix("/") ? base : base + "/"
+        return target == base || target.hasPrefix(prefix)
     }
 }

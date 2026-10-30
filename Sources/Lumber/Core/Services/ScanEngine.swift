@@ -86,24 +86,8 @@ actor ScanEngine {
         var lastEmit = Date.distantPast
         var typeCounts: [ResourceType: Int] = [:]
 
-        func emit(_ path: String) async {
-            let now = Date()
-            guard now.timeIntervalSince(lastEmit) > Self.progressInterval else { return }
-            lastEmit = now
-            let fraction = totalFiles > 0
-                ? 0.05 + 0.70 * Double(scanned) / Double(totalFiles)
-                : 0.35
-            await onUpdate(ScanUpdate(
-                fraction: fraction,
-                phaseText: "遍历工程目录并建立引用索引",
-                currentPath: path,
-                scannedCount: scanned,
-                totalCount: totalFiles,
-                foundCount: candidates.count,
-                ignoredCount: ignoredCount,
-                typeCounts: typeCounts
-            ))
-        }
+        // 进度节流直接内联在循环里：局部函数不带 actor 隔离，
+        // 从它里面读写下面这轮遍历累积的状态会被判成跨隔离域的数据竞争。
 
         let keys: Set<URLResourceKey> = [.isDirectoryKey, .fileSizeKey]
         if let enumerator = FileManager.default.enumerator(
@@ -177,7 +161,24 @@ actor ScanEngine {
                     }
                 }
 
-                await emit(absolutePath)
+                // 80ms 节流回主线程，避免枚举器每次都触发 UI 更新
+                let now = Date()
+                if now.timeIntervalSince(lastEmit) > Self.progressInterval {
+                    lastEmit = now
+                    let fraction = totalFiles > 0
+                        ? 0.05 + 0.70 * Double(scanned) / Double(totalFiles)
+                        : 0.35
+                    await onUpdate(ScanUpdate(
+                        fraction: fraction,
+                        phaseText: "遍历工程目录并建立引用索引",
+                        currentPath: absolutePath,
+                        scannedCount: scanned,
+                        totalCount: totalFiles,
+                        foundCount: candidates.count,
+                        ignoredCount: ignoredCount,
+                        typeCounts: typeCounts
+                    ))
+                }
             }
         }
 

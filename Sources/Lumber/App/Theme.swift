@@ -95,6 +95,108 @@ struct GlassDivider: View {
     }
 }
 
+// MARK: - 共享 UI 元件
+//
+// 侧栏按钮、列表行操作、预览窗口浮动操作是同一套视觉语言：
+// 26pt 图标热区 + 24pt 悬停圆 + 胶囊实体底板 + 56pt 状态徽章。
+// 这里做成唯一实现，避免三处各自漂移。
+
+/// 胶囊内的圆形图标按钮
+///
+/// 默认就是同一种观感；`deepensOnHover` 描述「图标平时次要、悬停加深为主色」的侧栏行为，
+/// 列表 / 预览里的按钮本身已是语义色（如红色删除），不需要这套切换。
+struct CircleIconButton: View {
+    let symbol: String
+    let help: String
+    /// 常态图标色
+    var tint: Color = .secondary
+    /// 悬停时图标是否加深为主色
+    var deepensOnHover = false
+    /// 悬停圆的填充色（固定色按钮传自身颜色，视觉更统一）
+    var hoverTint: Color = Color.lumberAccent
+    /// 悬停圆的最大不透明度
+    var hoverFillOpacity: CGFloat = 0.28
+    var disabled = false
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(foreground)
+                .frame(width: 26, height: 26)
+                .background {
+                    Circle()
+                        .fill(hoverTint.opacity(isHovering && !disabled ? hoverFillOpacity : 0))
+                        .frame(width: 24, height: 24)
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(help)
+        .disabled(disabled)
+        .opacity(disabled ? 0.4 : 1)
+        .onHover { isHovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: isHovering)
+    }
+
+    private var foreground: Color {
+        guard deepensOnHover else { return tint }
+        return isHovering ? Color.primary : Color.secondary
+    }
+}
+
+/// 胶囊实体底板（controlBackgroundColor + 轻投影）
+///
+/// 列表 cell、导航栏控件板、预览浮动操作都要「非透明底」，否则内容会从控件后面透出来。
+struct PillSurface: ViewModifier {
+    var horizontal: CGFloat = 2
+    var vertical: CGFloat = 1
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, horizontal)
+            .padding(.vertical, vertical)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+                    .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+            )
+    }
+}
+
+/// 判定状态徽章（高置信度 / 待确认 / 未加入 target / 不可用）
+struct StatusBadge: View {
+    let text: String
+    let systemImage: String
+    let tint: Color
+    var help: String = ""
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: systemImage)
+                .font(.system(size: 10, weight: .semibold))
+            Text(text)
+                .font(.system(size: 9, weight: .semibold))
+        }
+        .foregroundStyle(tint)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 1.5)
+        .background(Capsule().fill(tint.opacity(0.14)))
+        .overlay(Capsule().strokeBorder(tint.opacity(0.35), lineWidth: 0.5))
+        .help(help)
+    }
+}
+
+extension View {
+    func pillSurface(horizontal: CGFloat = 2, vertical: CGFloat = 1) -> some View {
+        modifier(PillSurface(horizontal: horizontal, vertical: vertical))
+    }
+}
+
 // MARK: - Toast
 
 struct ToastView: View {

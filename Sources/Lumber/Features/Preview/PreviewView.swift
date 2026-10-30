@@ -301,33 +301,27 @@ struct PreviewView: View {
 
     private var windowActions: some View {
         HStack(spacing: 2) {
-            FloatingCircleButton(
-                icon: "eye.slash",
-                tint: Color.primary.opacity(0.72),
+            CircleIconButton(
+                symbol: "eye.slash",
                 help: "忽略此资源",
+                tint: Color.primary.opacity(0.72),
                 disabled: isStale
             ) {
                 model.ignore(currentItem)
                 dismiss()
             }
-            FloatingCircleButton(
-                icon: "trash",
-                tint: .red,
+            CircleIconButton(
+                symbol: "trash",
                 help: "移到废纸篓（可从废纸篓恢复）",
+                tint: .red,
                 disabled: isStale
             ) {
                 model.requestDelete([currentItem])
                 dismiss()
             }
         }
-        .padding(.horizontal, 2)
-        .padding(.vertical, 1)
-        // 与结果列表 cell / 导航栏控件板同款胶囊底
-        .background(
-            Capsule(style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
-                .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
-        )
+        // 浮在图片上：必须是非透明底，否则图片会从按钮缝里透出来
+        .pillSurface()
     }
 
     // MARK: - 主体
@@ -589,39 +583,6 @@ struct PreviewView: View {
                 .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-// MARK: - 预览窗顶部浮动按钮（胶囊内线框图标 + 悬停小圆）
-
-private struct FloatingCircleButton: View {
-    let icon: String
-    let tint: Color
-    let help: String
-    var disabled: Bool = false
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(tint)
-                .frame(width: 26, height: 26)
-                .background {
-                    Circle()
-                        .fill(Color.lumberAccent.opacity(isHovering && !disabled ? 0.28 : 0))
-                        .frame(width: 24, height: 24)
-                }
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(help)
-        .accessibilityLabel(help)
-        .disabled(disabled)
-        .opacity(disabled ? 0.4 : 1)
-        .onHover { isHovering = $0 }
     }
 }
 

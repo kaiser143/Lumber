@@ -189,66 +189,42 @@ struct ResultCard: View {
 
     /// 「高置信度」：工程里完全找不到引用，可优先清理
     private var confirmedBadge: some View {
-        HStack(spacing: 3) {
-            Image(systemName: "checkmark.seal.fill")
-                .font(.system(size: 10, weight: .semibold))
-            Text("高置信度")
-                .font(.system(size: 9, weight: .semibold))
-        }
-        .foregroundStyle(.green)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 1.5)
-        .background(Capsule().fill(Color.green.opacity(0.14)))
-        .overlay(Capsule().strokeBorder(Color.green.opacity(0.35), lineWidth: 0.5))
-        .help(item.note ?? "工程文本与构建阶段中均未找到引用")
+        StatusBadge(
+            text: "高置信度",
+            systemImage: "checkmark.seal.fill",
+            tint: .green,
+            help: item.note ?? "工程文本与构建阶段中均未找到引用"
+        )
     }
 
     /// 「待确认」标记：命中了模糊信号（注释、名称片段、仅有 target 引用等）
     private var reviewBadge: some View {
-        HStack(spacing: 3) {
-            Image(systemName: "questionmark.circle.fill")
-                .font(.system(size: 10, weight: .semibold))
-            Text("待确认")
-                .font(.system(size: 9, weight: .semibold))
-        }
-        .foregroundStyle(.orange)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 1.5)
-        .background(Capsule().fill(Color.orange.opacity(0.14)))
-        .overlay(Capsule().strokeBorder(Color.orange.opacity(0.35), lineWidth: 0.5))
-        .help(item.note ?? "存在模糊信号，建议人工确认后再删除")
+        StatusBadge(
+            text: "待确认",
+            systemImage: "questionmark.circle.fill",
+            tint: .orange,
+            help: item.note ?? "存在模糊信号，建议人工确认后再删除"
+        )
     }
 
     /// 工程里有、但没有加入 target 构建阶段：不会进包，通常是漏配
     private var notInTargetBadge: some View {
-        HStack(spacing: 3) {
-            Image(systemName: "target")
-                .font(.system(size: 10, weight: .semibold))
-            Text("未加入 target")
-                .font(.system(size: 9, weight: .semibold))
-        }
-        .foregroundStyle(.blue)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 1.5)
-        .background(Capsule().fill(Color.blue.opacity(0.14)))
-        .overlay(Capsule().strokeBorder(Color.blue.opacity(0.35), lineWidth: 0.5))
-        .help(item.note ?? "在工程导航器中，但没有加入任何 target 构建阶段")
+        StatusBadge(
+            text: "未加入 target",
+            systemImage: "target",
+            tint: .blue,
+            help: item.note ?? "在工程导航器中，但没有加入任何 target 构建阶段"
+        )
     }
 
     /// 删除失败 / 目标已不存在
     private var unavailableBadge: some View {
-        HStack(spacing: 3) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 10, weight: .semibold))
-            Text("不可用")
-                .font(.system(size: 9, weight: .semibold))
-        }
-        .foregroundStyle(.red)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 1.5)
-        .background(Capsule().fill(Color.red.opacity(0.14)))
-        .overlay(Capsule().strokeBorder(Color.red.opacity(0.35), lineWidth: 0.5))
-        .help("删除失败或目标已被外部移动，无法再次操作")
+        StatusBadge(
+            text: "不可用",
+            systemImage: "exclamationmark.triangle.fill",
+            tint: .red,
+            help: "删除失败或目标已被外部移动，无法再次操作"
+        )
     }
 
     // MARK: - 右侧胶囊操作按钮（对标图1）
@@ -256,30 +232,24 @@ struct ResultCard: View {
     /// 浅粉底胶囊 + 轻投影，内含「在 Finder 中显示」与「移到废纸篓」
     private var actionPill: some View {
         HStack(spacing: 2) {
-            PillIconButton(
+            CircleIconButton(
                 symbol: "folder",
-                tint: Color.primary.opacity(0.72),
-                help: "在 Finder 中显示"
+                help: "在 Finder 中显示",
+                tint: Color.primary.opacity(0.72)
             ) {
                 revealInFinder()
             }
-            PillIconButton(
+            CircleIconButton(
                 symbol: "trash",
-                tint: .red,
                 help: isUnavailable ? "目标已不存在，无法删除" : "移到废纸篓（可从废纸篓恢复）",
+                tint: .red,
                 disabled: isUnavailable
             ) {
                 model.requestDelete([item])
             }
         }
-        .padding(.horizontal, 2)
-        .padding(.vertical, 1)
         // 与导航栏控件板一致：controlBackgroundColor + 同款投影
-        .background(
-            Capsule(style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
-                .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
-        )
+        .pillSurface()
     }
 
     /// 复制资源名到系统剪贴板（imageset 已去掉 .imageset 后缀，代码文件为完整文件名）
@@ -301,36 +271,4 @@ struct ResultCard: View {
     }
 }
 
-// MARK: - 胶囊内图标按钮（图1：线框图标 + 小号粉色悬停圆）
 
-private struct PillIconButton: View {
-    let symbol: String
-    let tint: Color
-    let help: String
-    var disabled: Bool = false
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(tint)
-                .frame(width: 26, height: 26)
-                .background {
-                    // 悬停高亮小圆（与外包胶囊无关）
-                    Circle()
-                        .fill(Color.lumberAccent.opacity(isHovering ? 0.28 : 0))
-                        .frame(width: 24, height: 24)
-                }
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(help)
-        .accessibilityLabel(help)
-        .disabled(disabled)
-        .opacity(disabled ? 0.4 : 1)
-        .onHover { isHovering = $0 }
-    }
-}

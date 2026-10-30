@@ -51,7 +51,7 @@
 ### 清理与导出
 
 - **安全删除**：统一走系统废纸篓；批量删除需确认
-- **可选清理 pbxproj**：删除时同步移除引用，写回前备份 `.lumber-bak`
+- **可选清理 pbxproj**：删除时同步移除引用，写回前备份 `.lumber-bak`。该备份是「首次修改前」的原始文件，重复清理不会覆盖它；需要回滚时把 `project.pbxproj.lumber-bak` 复制回 `project.pbxproj` 即可
 - **忽略规则**：兼容 `.gitignore` 常用子集，可导入，规则持久化
 - **导出 CSV**：当前筛选结果导出（UTF-8 with BOM，Excel / Numbers 可直接打开）
 
@@ -66,7 +66,7 @@
 ## 环境要求
 
 - macOS 26.0+
-- Xcode 26 / Swift 6（`swift-tools-version:5.9`）
+- Xcode 26 / Swift 6（`swift-tools-version:6.0`，即 Swift 6 语言模式：类型默认受并发检查约束）
 - 无第三方依赖
 
 ---
@@ -86,6 +86,15 @@ swift build -c release   # 产物：.build/release/Lumber
 ```
 
 也可以 `open Package.swift` 用 Xcode 开发。
+
+打包成可分发的 `.app` 与 `.dmg`（脚本会 build release、拷贝 `Resources/`、做 ad-hoc 签名后再生成镜像）：
+
+```bash
+./package-app.sh                       # 产物：dist/Lumber.app 与 dist/Lumber-<版本>.dmg
+./package-app.sh ./dist/MyApp.app ./dist/My.dmg   # 也可自定义产物路径
+```
+
+版本号取自 `Resources/Info.plist` 的 `CFBundleShortVersionString`。仓库没有开发者证书，脚本用 `--sign -` 做 ad-hoc 签名并 `codesign --verify`；这一步不能省，否则下载后 Gatekeeper 会判定「已损坏」。
 
 首次扫描其他目录若提示无权限，请在 **系统设置 › 隐私与安全性 › 完全磁盘访问权限** 中放行。
 
@@ -160,25 +169,36 @@ Debug/*.png      # 相对工程根目录
 ```
 Sources/Lumber/
 ├── App/            入口、全局状态、外壳与主题
+│   ├── LumberApp.swift         @main 入口、菜单命令、主窗口与预览窗口场景
+│   ├── AppModel*.swift         @Observable 状态中枢（状态机 / 拖放扫描 / 忽略删除导出 / 选中与预览导航）
+│   ├── AppTypes.swift          ResourceType、SortOption、StatusFilter 与扫描进度模型
+│   ├── RootView.swift          侧边栏 + 导航栏 + 页面路由 + AppKit 红黄绿偏移桥接
+│   └── Theme.swift             语义配色、glassPanel 统一封装、圆形图标按钮 / 胶囊底板 / 状态徽章
 ├── Core/
 │   ├── Models/     资源与工程数据模型
-│   ├── Parsing/    pbxproj、Assets、Info.plist 解析
-│   ├── Services/   扫描引擎、引用判定、预览、废纸篓、CSV、pbxproj 清理
+│   ├── Parsing/    pbxproj（词法 → 字典树 → 语义图 → 装载）、Assets、Info.plist 解析
+│   ├── Services/   扫描引擎、引用索引与判定、预览、废纸篓、CSV、pbxproj 清理
 │   ├── Ignore/     忽略规则匹配与持久化
-│   └── Mocks/      演示数据
+│   └── Mocks/      演示数据（仅 --mock / --demo 使用）
 └── Features/       首页、扫描、结果、预览、规则、设置、关于、多工程选择
 Tests/LumberTests/  解析 / 忽略 / 判定 / 导出 / 清理单元测试
+Resources/          Info.plist 与图标源（见下）
+package-app.sh      release 构建 → ad-hoc 签名 → .app + .dmg
 ```
+
+> `Resources/` 未在 `Package.swift` 里声明为 bundle 资源：`swift run` 直接从源码目录回溯读取图标，打包后的 `.app` 内则由打包脚本拷贝。
+> 项目最低部署目标就是 macOS 26.0，因此液态玻璃 API（`glassEffect` 等）一律不做 `#available` 兜底。
 
 ---
 
 ## 测试
 
 ```bash
-swift test
+swift test                                  # 全量
+swift test --filter PBXProjCleanerTests     # 只跑某个用例类
 ```
 
-覆盖 pbxproj 解析、忽略规则、引用判定、Assets 解析、工程选择、CSV 导出、pbxproj 清理等。CI 见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
+覆盖 pbxproj 解析、忽略规则、引用判定、Assets 解析、工程选择、CSV 导出、pbxproj 清理、废纸篓路径围栏等。CI 见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
 
 ---
 

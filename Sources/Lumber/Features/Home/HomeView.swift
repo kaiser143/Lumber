@@ -10,8 +10,6 @@ import UniformTypeIdentifiers
 struct HomeView: View {
     @Environment(AppModel.self) private var model
     @State private var hovering = false
-    /// 鼠标是否停在点击热区内（悬停反馈 + 手型光标）
-    @State private var pointing = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -79,9 +77,10 @@ struct HomeView: View {
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onTapGesture { model.chooseProject() }
         .onHover { inside in
-            pointing = inside
             if inside { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
         }
+        // 拖入成功后立刻跳到扫描页，热区会随视图消失：这里必须复位，否则手型光标会残留
+        .onDisappear { NSCursor.arrow.set() }
     }
 
     private var recentSection: some View {

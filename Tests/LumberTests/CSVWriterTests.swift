@@ -13,6 +13,19 @@ final class CSVWriterTests: XCTestCase {
         XCTAssertEqual(CSVWriter.escape("a\rb"), "\"a\rb\"")
     }
 
+    func testEscapeNeutralizesFormulaInjection() {
+        // CWE-1236：名称/路径来自被扫描工程，必须以单引号中和，否则表格软件会执行
+        XCTAssertEqual(CSVWriter.escape("=cmd|'/c calc'!A1"), "'=cmd|'/c calc'!A1")
+        XCTAssertEqual(CSVWriter.escape("+1+1"), "'+1+1")
+        XCTAssertEqual(CSVWriter.escape("-2+3"), "'-2+3")
+        XCTAssertEqual(CSVWriter.escape("@SUM(A1)"), "'@SUM(A1)")
+        XCTAssertEqual(CSVWriter.escape("\t=1"), "'\t=1")
+        // 需要加引号时，单引号在包裹引号内部
+        XCTAssertEqual(CSVWriter.escape("=A1,B1"), "\"'=A1,B1\"")
+        XCTAssertEqual(CSVWriter.escape("=say \"hi\""), "\"'=say \"\"hi\"\"\"")
+        XCTAssertEqual(CSVWriter.escape(""), "")
+    }
+
     func testReportContainsHeaderAndStatus() {
         let item = ResourceItem(
             name: "hero_banner",

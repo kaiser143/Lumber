@@ -113,8 +113,9 @@ extension AppModel {
         isDeleting = true
         let shouldCleanPbx = cleanPbxprojOnDelete && !isMockMode
         let xcodeprojURL = project?.xcodeprojURL
+        let rootDirectory = project?.rootDirectory
         Task { @MainActor in
-            let outcome = await TrashService.recycle(targets)
+            let outcome = await TrashService.recycle(targets, rootDirectory: rootDirectory)
             var pbxCleaned = 0
             var pbxError: String?
             if shouldCleanPbx, let xcodeprojURL, !outcome.trashedIDs.isEmpty {

@@ -38,6 +38,17 @@ struct PBXProjectGraph {
 }
 
 extension PBXProjectGraph {
+    /// 工程源码根目录：默认是 .xcodeproj 所在目录，被 rootObject.projectDirPath 覆盖后再标准化。
+    ///
+    /// 扫描判定与 pbxproj 清理必须得到同一个根目录，否则两处对「同一路径」的理解会漂移。
+    static func rootDirectory(xcodeprojURL: URL, projectDirPath: String?) -> URL {
+        var rootDirectory = xcodeprojURL.deletingLastPathComponent()
+        if let dirPath = projectDirPath, !dirPath.isEmpty {
+            rootDirectory = rootDirectory.appending(path: dirPath)
+        }
+        return rootDirectory.standardizedFileURL
+    }
+
     static func build(xcodeprojURL: URL, pbxprojText: String) throws -> PBXProjectGraph {
         let root = try PBXParser.parse(pbxprojText)
         guard let objects = root.dictionary("objects") else {
@@ -47,11 +58,10 @@ extension PBXProjectGraph {
         let rootObjectID = root.string("rootObject")
         let projectObject = rootObjectID.flatMap { objects[$0]?.dictionaryValue }
 
-        var rootDirectory = xcodeprojURL.deletingLastPathComponent()
-        if let dirPath = projectObject?.string("projectDirPath"), !dirPath.isEmpty {
-            rootDirectory = rootDirectory.appending(path: dirPath)
-        }
-        rootDirectory = rootDirectory.standardizedFileURL
+        let rootDirectory = Self.rootDirectory(
+            xcodeprojURL: xcodeprojURL,
+            projectDirPath: projectObject?.string("projectDirPath")
+        )
 
         let resolver = PathResolver(objects: objects, rootDirectory: rootDirectory)
 

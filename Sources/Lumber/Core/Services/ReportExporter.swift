@@ -30,11 +30,19 @@ enum CSVWriter {
         fields.map(escape).joined(separator: ",")
     }
 
+    /// 公式注入前缀：Excel / Numbers / Sheets 会把以这些字符开头的单元格当公式执行。
+    /// 名称、路径、判定说明都来自被扫描的工程，属于不可信输入（CWE-1236）。
+    private static let formulaPrefixes: Set<Character> = ["=", "+", "-", "@", "\t", "\r"]
+
     static func escape(_ value: String) -> String {
-        guard value.contains(where: { $0 == "," || $0 == "\"" || $0 == "\n" || $0 == "\r" }) else {
-            return value
+        guard !value.isEmpty else { return value }
+        let needsQuote = value.contains(where: { $0 == "," || $0 == "\"" || $0 == "\n" || $0 == "\r" })
+        let body = value.replacingOccurrences(of: "\"", with: "\"\"")
+        guard let first = value.first, Self.formulaPrefixes.contains(first) else {
+            return needsQuote ? "\"\(body)\"" : body
         }
-        return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+        // 单引号必须放在包裹引号内部，否则表格软件仍会按公式解析
+        return needsQuote ? "\"'\(body)\"" : "'\(body)"
     }
 }
 

@@ -110,9 +110,10 @@ struct SidebarView: View {
     private var titleRow: some View {
         HStack(spacing: 0) {
             Spacer(minLength: 0)
-            SidebarToggleButton(icon: "sidebar.left", tip: "隐藏菜单") {
+            CircleIconButton(symbol: "sidebar.left", help: "隐藏菜单", deepensOnHover: true) {
                 withAnimation(.easeInOut(duration: 0.22)) { isVisible = false }
             }
+            .pillSurface()
             .offset(y: -4)
         }
         .padding(.trailing, 8)
@@ -129,56 +130,6 @@ struct SidebarView: View {
                     .fill(Color(nsColor: .separatorColor).opacity(0.45))
                     .frame(width: 0.5)
             }
-    }
-}
-
-// MARK: - 菜单显隐按钮（与 cell / 预览操作同款胶囊底）
-
-struct SidebarToggleButton: View {
-    let icon: String
-    let tip: String
-    /// 非空时图标固定用该色（如 GitHub 星标的金色），不再随次要色变化
-    var iconColor: Color? = nil
-    let action: () -> Void
-
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(foreground)
-                .frame(width: 26, height: 26)
-                .background {
-                    Circle()
-                        .fill(hoverFill)
-                        .frame(width: 24, height: 24)
-                }
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 2)
-        .padding(.vertical, 1)
-        .background(
-            Capsule(style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
-                .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
-        )
-        .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.12), value: hovering)
-        .help(tip)
-    }
-
-    private var foreground: Color {
-        if let iconColor { return iconColor }
-        return hovering ? Color.primary : Color.secondary
-    }
-
-    private var hoverFill: Color {
-        if let iconColor {
-            return iconColor.opacity(hovering ? 0.22 : 0)
-        }
-        return Color.lumberAccent.opacity(hovering ? 0.28 : 0)
     }
 }
 
@@ -240,7 +191,7 @@ struct DetailView: View {
                     switch model.phase {
                     case .idle: HomeView()
                     case .scanning: ScanningView()
-                    case .results: ResultsScreen()
+                    case .results: ResultsView()
                     }
                 case .rules: IgnoreRulesView()
                 case .settings: SettingsView()
@@ -254,7 +205,8 @@ struct DetailView: View {
         }
         .ignoresSafeArea(edges: .top)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.lumberCanvas)        .overlay(alignment: .bottom) {
+        .background(Color.lumberCanvas)
+        .overlay(alignment: .bottom) {
             VStack(spacing: 8) {
                 // 首页自己会在拖放区显示红框提示；其它页面（结果页拖入、扫描中）用底部胶囊提示
                 if let error = model.dropError, !(model.page == .scan && model.phase == .idle) {
@@ -328,9 +280,10 @@ struct DetailView: View {
     @ViewBuilder
     private var expandButton: some View {
         if !isSidebarVisible {
-            SidebarToggleButton(icon: "sidebar.left", tip: "显示菜单") {
+            CircleIconButton(symbol: "sidebar.left", help: "显示菜单", deepensOnHover: true) {
                 withAnimation(.easeInOut(duration: 0.22)) { isSidebarVisible = true }
             }
+            .pillSurface()
             .offset(y: -4)
             .padding(.leading, 62)
             .transition(.opacity)
@@ -343,14 +296,17 @@ struct DetailView: View {
     private var githubButton: some View {
         // 金色实心星，对标常见「已收藏 / Star」高亮态（约 #FFC107）
         let starGold = Color(red: 1.0, green: 0.757, blue: 0.027)
-        return SidebarToggleButton(
-            icon: "star.fill",
-            tip: "在 GitHub 打开仓库",
-            iconColor: starGold
+        return CircleIconButton(
+            symbol: "star.fill",
+            help: "在 GitHub 打开仓库",
+            tint: starGold,
+            hoverTint: starGold,
+            hoverFillOpacity: 0.22
         ) {
             guard let url = URL(string: LumberInfo.repositoryURL) else { return }
             NSWorkspace.shared.open(url)
         }
+        .pillSurface()
     }
 }
 
@@ -363,13 +319,18 @@ private struct WindowTitleAccessor: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
-        DispatchQueue.main.async { view.window?.title = title }
+        DispatchQueue.main.async {
+            // AppKit 成员是主线程隔离的：先在回调里声明隔离再访问
+            MainActor.assumeIsolated { view.window?.title = title }
+        }
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        let title = title
-        DispatchQueue.main.async { nsView.window?.title = title }
+        let currentTitle = title
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { nsView.window?.title = currentTitle }
+        }
     }
 }
 
@@ -395,13 +356,17 @@ private struct TrafficLightsOffset: NSViewRepresentable {
         context.coordinator.apply(to: nsView.window)
     }
 
+    /// 整个 Coordinator 只碰 AppKit，统一隔离到主线程
+    @MainActor
     final class Coordinator {
         var y: CGFloat
         /// 系统默认 y（AppKit 坐标）；目标位置始终是 `base - y`
         private var baseYs: [ObjectIdentifier: CGFloat] = [:]
         /// 上一次成功写进按钮的偏移，用来在改 `y` 时还原 base
         private var appliedY: CGFloat = 0
-        private var observations: [NSObjectProtocol] = []
+        /// 注销令牌只在 deinit 里用；deinit 不在主线程隔离域内，因此这里显式放宽隔离检查
+        /// （代表对象是 AppKit 在主线程创建/销毁的，注销不会再有其它线程并发访问）。
+        private nonisolated(unsafe) var observations: [NSObjectProtocol] = []
 
         init(y: CGFloat) { self.y = y }
 
@@ -413,17 +378,24 @@ private struct TrafficLightsOffset: NSViewRepresentable {
 
         func attach(to view: NSView) {
             let center = NotificationCenter.default
-            let apply: (Notification) -> Void = { [weak self, weak view] note in
-                guard let self, let view, let window = view.window else { return }
-                if let noted = note.object as? NSWindow, noted !== window { return }
-                self.apply(to: window)
+            // NotificationCenter 的回调块是 @Sendable：先在块外取出 Sendable 的窗口标识，
+            // 再在块内用 MainActor.assumeIsolated 声明主线程隔离后才碰 AppKit
+            let apply: @Sendable (Notification) -> Void = { [weak self, weak view] note in
+                guard let noted = note.object as? NSWindow else { return }
+                let notedID = ObjectIdentifier(noted)
+                MainActor.assumeIsolated {
+                    guard let self, let view, let window = view.window else { return }
+                    guard ObjectIdentifier(window) == notedID else { return }
+                    self.apply(to: window)
+                }
             }
             observations = [
                 center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main, using: apply),
                 center.addObserver(forName: NSWindow.didResizeNotification, object: nil, queue: .main, using: apply),
             ]
+            // attach 时 view 通常还没进窗口，等下一个主循环再对齐一次
             DispatchQueue.main.async { [weak self, weak view] in
-                self?.apply(to: view?.window)
+                MainActor.assumeIsolated { self?.apply(to: view?.window) }
             }
         }
 

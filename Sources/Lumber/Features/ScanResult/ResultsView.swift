@@ -2,14 +2,6 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-// MARK: - 结果列表页入口
-
-struct ResultsScreen: View {
-    var body: some View {
-        ResultsView()
-    }
-}
-
 // MARK: - 结果列表
 
 struct ResultsView: View {
@@ -173,21 +165,20 @@ struct ResultsNavControls: View {
     @FocusState private var searchFocused: Bool
 
     var body: some View {
-        HStack(spacing: 6) {
-            searchField
-            filterMenu
-            actionsMenu
-            refreshButton
-            homeButton
+        // 行内控件本身就是玻璃（搜索 / 筛选胶囊 / 三个圆按钮），包一层 GlassEffectContainer
+        // 让它们融合成一条连续的液态玻璃栏；底下不再垫实底板——那层板会把每块玻璃
+        // 各自的高光和相邻控件切开。导航栏本身有实体背景，这里不存在内容穿透的问题。
+        GlassEffectContainer(spacing: 6) {
+            HStack(spacing: 6) {
+                searchField
+                filterMenu
+                actionsMenu
+                refreshButton
+                homeButton
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
         }
-        // 非透明底：整行放在一块深色板上，避免和卡片区穿帮
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
-                .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
-        )
         .sheet(isPresented: $showIgnoredSheet) {
             IgnoredItemsSheet()
         }
@@ -230,8 +221,9 @@ struct ResultsNavControls: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(Color.primary.opacity(0.055), in: Capsule())
-        .overlay(Capsule().strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5))
+        // 与同行其它控件一致改成玻璃；原来是 5.5% 深色填充 + 白描边，
+        // 那套依赖底下的实底板，去掉底板后会贴在背景上看不出边界。
+        .glassPanel(in: Capsule())
         .help("搜索资源名或相对路径（⌘F）")
     }
 
@@ -304,7 +296,8 @@ struct ResultsNavControls: View {
             }
             .padding(.horizontal, 9)
             .padding(.vertical, 4)
-            .glassPanel(in: Capsule())
+            // 同一行里的圆形按钮都是 interactive，筛选胶囊同为可点控件也保持一致
+            .glassPanel(in: Capsule(), interactive: true)
             .contentShape(Capsule())
         }
         .menuStyle(.borderlessButton)

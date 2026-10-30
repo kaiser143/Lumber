@@ -56,7 +56,9 @@ enum CLIInspect {
                 print("  \(flag) \(item.type.rawValue)  \(item.relativePath)  \(item.sizeText)  — \(item.note ?? "")")
             }
         } catch {
+            // 失败必须给非零退出码，否则 CI / 脚本无法感知解析失败
             print("解析失败：\(error.localizedDescription)")
+            exit(1)
         }
         exit(0)
     }

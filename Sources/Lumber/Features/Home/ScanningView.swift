@@ -85,10 +85,16 @@ struct ScanningView: View {
     }
 
     /// 各类型发现数（评估阶段显示候选数，判定阶段显示已确认的冗余数）
+    ///
+    /// 包一层 GlassEffectContainer：相邻 chips 会被合成为一块连续的玻璃，
+    /// 而不是各自一圈高光 + 互相叠影。`spacing` 要和 HStack 一致，
+    /// 容器靠它判断两个玻璃块在什么距离开始融合。
     private var typeChips: some View {
-        HStack(spacing: 8) {
-            ForEach(ResourceType.allCases, id: \.self) { type in
-                typeChip(type, count: model.progress.typeCounts[type] ?? 0)
+        GlassEffectContainer(spacing: 8) {
+            HStack(spacing: 8) {
+                ForEach(ResourceType.allCases, id: \.self) { type in
+                    typeChip(type, count: model.progress.typeCounts[type] ?? 0)
+                }
             }
         }
     }
